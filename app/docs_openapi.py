@@ -33,7 +33,9 @@ SAIDAS: dict[str, dict[str, Any]] = {
     "Usuario": {"type": "object", "properties": {
         "id": UUID, "nome": {"type": "string"}, "email": {"type": "string", "format": "email"},
         "moeda": {"type": "string", "example": "BRL"}, "orcamento_mensal": {**VALOR, "nullable": True},
-        "orcamento_diario": {**VALOR, "nullable": True}, "criado_em": TS}},
+        "orcamento_diario": {**VALOR, "nullable": True},
+        "plano": {"type": "string", "enum": ["teste", "completo"]}, "teste_expira_em": {**TS, "nullable": True},
+        "dias_restantes_teste": {"type": "integer", "nullable": True}, "teste_ativo": {"type": "boolean"}, "criado_em": TS}},
     "Tokens": {"type": "object", "properties": {
         "usuario": {"$ref": REF.format(model="Usuario")},
         "access_token": {"type": "string"}, "refresh_token": {"type": "string"}}},
