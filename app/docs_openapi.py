@@ -94,6 +94,10 @@ SAIDAS: dict[str, dict[str, Any]] = {
         "contas": {"type": "object", "properties": {"pagas": {"type": "integer"}, "pendentes": {"type": "integer"}, "total_pendente": VALOR}},
         "projecao_fechamento": VALOR,
         "semanas": {"type": "array", "items": {"type": "object", "properties": {"inicio": DATA, "fim": DATA, "total": VALOR}}}}},
+    "Insight": {"type": "object", "properties": {
+        "tipo": {"type": "string", "example": "categoria_subiu"}, "nivel": {"type": "string", "enum": ["atencao", "bom", "info"]},
+        "titulo": {"type": "string", "example": "Mercado 32% acima da semana passada"}, "detalhe": {"type": "string"},
+        "valor": {"type": "number", "nullable": True}, "categoria_id": {**UUID, "nullable": True}, "link": {"type": "string", "nullable": True}}},
     "Saude": {"type": "object", "properties": {"status": {"type": "string", "example": "ok"}, "banco": {"type": "string", "example": "ok"}}},
 }
 
@@ -238,6 +242,8 @@ def montar_spec(servidor: str) -> dict[str, Any]:
         f"{v1}/metricas/diario": {"get": _op("Métricas", "Dia: gastos, receitas, saldo do orçamento diário", _resp(_ref("MetricaDiaria")), params=[_param("data", format="date")])},
         f"{v1}/metricas/semanal": {"get": _op("Métricas", "Semana (segunda a domingo) com comparativo", _resp(_ref("MetricaSemanal")), params=[_param("inicio", format="date", descricao="segunda-feira")])},
         f"{v1}/metricas/mensal": {"get": _op("Métricas", "Mês: evolução, categorias, contas, projeção", _resp(_ref("MetricaMensal")), params=[_param("mes", example="2026-08")])},
+
+        f"{v1}/metricas/insights": {"get": _op("Métricas", "Insights automáticos da semana (categorias, preços, orçamento, contas)", _resp({"type": "object", "properties": {"inicio": DATA, "fim": DATA, "dados": {"type": "array", "items": _ref("Insight")}}}), params=[_param("inicio", format="date", descricao="segunda-feira; padrão = semana atual")])},
 
         f"{v1}/exportar/lancamentos.csv": {"get": _op("Exportação", "CSV (;) com BOM", {"200": {"description": "CSV", "content": {"text/csv": {}}}}, params=[_param("de", format="date"), _param("ate", format="date")])},
         f"{v1}/exportar/lancamentos.json": {"get": _op("Exportação", "JSON completo", {"200": {"description": "JSON", "content": {"application/json": {}}}}, params=[_param("de", format="date"), _param("ate", format="date")])},
