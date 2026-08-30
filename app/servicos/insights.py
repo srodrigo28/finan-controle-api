@@ -23,6 +23,10 @@ VARIACAO_RELEVANTE = 25.0          # % para virar insight
 MAX_INSIGHTS = 8
 
 
+def _dias(n: int) -> str:
+    return "falta 1 dia" if n == 1 else f"faltam {n} dias"
+
+
 def _moeda(v: Decimal | float) -> str:
     v = float(v)
     return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -120,10 +124,10 @@ def _orcamentos_categoria(usuario: Usuario, referencia: date, nomes: dict) -> li
         dias_restantes = dias_do_mes(referencia.year, referencia.month) - referencia.day
         if pct > 100:
             saida.append(_insight("orcamento_estourou", "atencao", f"{nome} estourou o orçamento do mês",
-                                  f"{_moeda(g)} de {_moeda(orc)} ({pct:.0f}%), e ainda faltam {dias_restantes} dias.", g - orc, cat_id, "/mes"))
+                                  f"{_moeda(g)} de {_moeda(orc)} ({pct:.0f}%), e ainda {_dias(dias_restantes)}.", g - orc, cat_id, "/mes"))
         elif pct >= 85:
             saida.append(_insight("orcamento_perto", "atencao", f"{nome} já usou {pct:.0f}% do orçamento",
-                                  f"Restam {_moeda(orc - g)} para {dias_restantes} dias.", orc - g, cat_id, "/mes"))
+                                  f"Restam {_moeda(orc - g)} — {_dias(dias_restantes)} no mês.", orc - g, cat_id, "/mes"))
     return saida[:2]
 
 
