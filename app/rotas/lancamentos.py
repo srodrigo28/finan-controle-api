@@ -2,6 +2,8 @@
 import os
 import uuid
 
+from io import BytesIO
+
 from flask import Blueprint, current_app, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, or_, select
@@ -10,6 +12,7 @@ from werkzeug.utils import secure_filename
 from app.erros import ErroApi, nao_encontrado
 from app.esquemas.lancamento import AtualizarLancamento, CriarLancamento
 from app.extensoes import db
+from app.servicos import bucket
 from app.modelos import Anexo, Lancamento, SessaoCompra
 from app.servicos.categorias import categoria_do_usuario
 from app.util import dec, parse_data, parse_uuid, usuario_id, validar
@@ -126,6 +129,12 @@ def excluir(lid: str):
 # ---------- Anexos ----------
 
 def _remover_arquivo(anexo: Anexo) -> None:
+    if anexo.armazenamento == "bucket":
+        if anexo.bucket_file_id:
+            bucket.apagar(anexo.bucket_file_id)  # best-effort
+        return
+    if not anexo.caminho:
+        return
     try:
         os.remove(os.path.join(current_app.config["UPLOAD_DIR"], anexo.caminho))
     except OSError:
@@ -150,18 +159,36 @@ def enviar_anexo(lid: str):
         raise ErroApi("VALIDACAO", "Arquivo vazio.", 422)
 
     nome_disco = f"{uuid.uuid4()}{MIMES_PERMITIDOS[mime]}"
-    pasta = os.path.join(current_app.config["UPLOAD_DIR"], str(lanc.usuario_id))
-    os.makedirs(pasta, exist_ok=True)
-    with open(os.path.join(pasta, nome_disco), "wb") as f:
-        f.write(conteudo)
+    nome_original = secure_filename(arquivo.filename)[:200] or nome_disco
 
-    anexo = Anexo(
-        lancamento_id=lanc.id,
-        nome=secure_filename(arquivo.filename)[:200] or nome_disco,
-        caminho=f"{lanc.usuario_id}/{nome_disco}",
-        tipo_mime=mime,
-        tamanho=len(conteudo),
-    )
+    if bucket.configurado():
+        # Comprovante vai para o Bucket: usuarios/<id>/comprovantes/<AAAA-MM>
+        arquivo.stream = BytesIO(conteudo)
+        pasta = f"usuarios/{lanc.usuario_id}/comprovantes/{lanc.data.strftime('%Y-%m')}"
+        enviado = bucket.enviar(arquivo, pasta, nome_disco)
+        anexo = Anexo(
+            lancamento_id=lanc.id,
+            nome=nome_original,
+            caminho=None,
+            tipo_mime=mime,
+            tamanho=len(conteudo),
+            armazenamento="bucket",
+            bucket_file_id=enviado.file_id,
+            url_publica=enviado.url,
+        )
+    else:
+        pasta = os.path.join(current_app.config["UPLOAD_DIR"], str(lanc.usuario_id))
+        os.makedirs(pasta, exist_ok=True)
+        with open(os.path.join(pasta, nome_disco), "wb") as f:
+            f.write(conteudo)
+        anexo = Anexo(
+            lancamento_id=lanc.id,
+            nome=nome_original,
+            caminho=f"{lanc.usuario_id}/{nome_disco}",
+            tipo_mime=mime,
+            tamanho=len(conteudo),
+            armazenamento="disco",
+        )
     db.session.add(anexo)
     db.session.commit()
     return jsonify(anexo.para_dict()), 201
@@ -188,7 +215,12 @@ def excluir_anexo(aid: str):
 @jwt_required()
 def baixar_anexo(aid: str):
     anexo = _buscar_anexo(aid)
-    caminho = os.path.join(current_app.config["UPLOAD_DIR"], anexo.caminho)
-    if not os.path.isfile(caminho):
+    if anexo.armazenamento == "bucket":
+        if not anexo.url_publica:
+            raise nao_encontrado("Arquivo do anexo")
+        conteudo, _ = bucket.baixar(anexo.url_publica)
+        return send_file(BytesIO(conteudo), mimetype=anexo.tipo_mime, download_name=anexo.nome, as_attachment=False)
+    caminho = os.path.join(current_app.config["UPLOAD_DIR"], anexo.caminho or "")
+    if not anexo.caminho or not os.path.isfile(caminho):
         raise nao_encontrado("Arquivo do anexo")
     return send_file(caminho, mimetype=anexo.tipo_mime, download_name=anexo.nome, as_attachment=False)

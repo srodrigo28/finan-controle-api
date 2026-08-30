@@ -46,7 +46,7 @@ SAIDAS: dict[str, dict[str, Any]] = {
         "ordem": {"type": "integer"}, "criado_em": TS}},
     "Anexo": {"type": "object", "properties": {
         "id": UUID, "lancamento_id": UUID, "nome": {"type": "string"}, "tipo_mime": {"type": "string"},
-        "tamanho": {"type": "integer"}, "url": {"type": "string"}, "criado_em": TS}},
+        "tamanho": {"type": "integer"}, "armazenamento": {"type": "string", "enum": ["disco", "bucket"]}, "url": {"type": "string", "description": "sempre via API (o Bucket nunca é exposto ao cliente)"}, "criado_em": TS}},
     "Item": {"type": "object", "properties": {
         "id": UUID, "sessao_id": UUID, "descricao": {"type": "string"}, "categoria_id": {**UUID, "nullable": True},
         "valor_unitario": VALOR, "quantidade": {"type": "number", "example": 1.5}, "subtotal": VALOR,
@@ -245,6 +245,15 @@ def montar_spec(servidor: str) -> dict[str, Any]:
 
         f"{v1}/metricas/insights": {"get": _op("Métricas", "Insights automáticos da semana (categorias, preços, orçamento, contas)", _resp({"type": "object", "properties": {"inicio": DATA, "fim": DATA, "dados": {"type": "array", "items": _ref("Insight")}}}), params=[_param("inicio", format="date", descricao="segunda-feira; padrão = semana atual")])},
 
+        f"{v1}/notificacoes/vapid": {"get": _op("Notificações", "Chave pública VAPID para assinar o push", _resp({"type": "object", "properties": {"chave_publica": {"type": "string"}, "ativo": {"type": "boolean"}}}), publico=True)},
+        f"{v1}/notificacoes/inscricoes": {"get": _op("Notificações", "Aparelhos inscritos do usuário", _resp({"type": "object", "properties": {"dados": {"type": "array", "items": {"type": "object"}}, "ativo": {"type": "boolean"}}}))},
+        f"{v1}/notificacoes/inscrever": {
+            "post": _op("Notificações", "Inscrever este aparelho (PushSubscription.toJSON())", _resp({"type": "object"}, "Inscrito", "201"), {"required": True, "content": {"application/json": {"schema": {"type": "object", "properties": {"endpoint": {"type": "string"}, "keys": {"type": "object", "properties": {"p256dh": {"type": "string"}, "auth": {"type": "string"}}}, "aparelho": {"type": "string"}}}}}}),
+            "delete": _op("Notificações", "Remover inscrição (sem endpoint = todas do usuário)", _resp(None, "Removida", "204")),
+        },
+        f"{v1}/notificacoes/testar": {"post": _op("Notificações", "Enviar um push de teste para os aparelhos do usuário", _resp({"type": "object", "properties": {"enviados": {"type": "integer"}}}))},
+        f"{v1}/notificacoes/enviar-lembretes": {"post": _op("Notificações", "Disparo diário de lembretes de vencimento (cron da VPS; header X-Cron-Token)", _resp({"type": "object", "properties": {"ativo": {"type": "boolean"}, "usuarios": {"type": "integer"}, "enviados": {"type": "integer"}}}), params=[_param("X-Cron-Token", "header", obrigatorio=True)], publico=True)},
+
         f"{v1}/exportar/lancamentos.csv": {"get": _op("Exportação", "CSV (;) com BOM", {"200": {"description": "CSV", "content": {"text/csv": {}}}}, params=[_param("de", format="date"), _param("ate", format="date")])},
         f"{v1}/exportar/lancamentos.json": {"get": _op("Exportação", "JSON completo", {"200": {"description": "JSON", "content": {"application/json": {}}}}, params=[_param("de", format="date"), _param("ate", format="date")])},
     }
@@ -262,7 +271,7 @@ def montar_spec(servidor: str) -> dict[str, Any]:
             ),
         },
         "servers": [{"url": servidor}],
-        "tags": [{"name": t} for t in ("Infra", "Auth", "Categorias", "Lançamentos", "Modo Mercado", "Preços", "Contas", "Métricas", "Exportação")],
+        "tags": [{"name": t} for t in ("Infra", "Auth", "Categorias", "Lançamentos", "Modo Mercado", "Preços", "Contas", "Métricas", "Notificações", "Exportação")],
         "components": {
             "schemas": componentes,
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}},

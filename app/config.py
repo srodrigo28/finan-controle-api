@@ -33,6 +33,19 @@ class Config:
     FUSO_HORARIO = "America/Sao_Paulo"
     JSON_SORT_KEYS = False
 
+    # Bucket (99dev.pro/bucket) — sem BUCKET_URL os anexos ficam em disco (dev)
+    BUCKET_URL = os.getenv("BUCKET_URL", "").rstrip("/")
+    BUCKET_DEFAULT = os.getenv("BUCKET_DEFAULT", "")
+    BUCKET_TOKEN = os.getenv("BUCKET_TOKEN", "")
+    BUCKET_TIMEOUT = int(os.getenv("BUCKET_TIMEOUT", "20"))
+
+    # Web Push (VAPID) e token do cron de lembretes
+    VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+    VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:contato@99dev.pro")
+    CRON_TOKEN = os.getenv("CRON_TOKEN", "")
+    APP_URL = os.getenv("APP_URL", "https://finan-controle.vercel.app")
+
 
 class ConfigTeste(Config):
     TESTING = True
@@ -41,3 +54,7 @@ class ConfigTeste(Config):
         "postgresql+psycopg://finan_user:x@127.0.0.1:5436/finan_controle",
     )
     UPLOAD_DIR = str(RAIZ / "uploads_teste")
+    BUCKET_URL = ""  # testes: disco (o cliente do bucket é testado com mock)
+    VAPID_PUBLIC_KEY = "BF3TPGxPXsNOdeHoRfscTESTE"
+    VAPID_PRIVATE_KEY = ""
+    CRON_TOKEN = "cron-teste"

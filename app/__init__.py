@@ -51,11 +51,11 @@ def create_app(config: type[Config] | None = None) -> Flask:
     os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
 
     from app import modelos  # noqa: F401  (registra os modelos no metadata)
-    from app.rotas import auth, categorias, contas, docs, exportar, lancamentos, metricas, precos, saude, sessoes
+    from app.rotas import auth, categorias, contas, docs, exportar, lancamentos, metricas, notificacoes, precos, saude, sessoes
 
     app.register_blueprint(saude.bp)
     app.register_blueprint(docs.bp)
-    for modulo in (auth, categorias, lancamentos, sessoes, precos, contas, metricas, exportar):
+    for modulo in (auth, categorias, lancamentos, sessoes, precos, contas, metricas, exportar, notificacoes):
         app.register_blueprint(modulo.bp, url_prefix=PREFIXO_API + modulo.bp.url_prefix)
 
     registrar_handlers(app)

@@ -71,9 +71,13 @@ class Anexo(ModeloBase):
         UUID(as_uuid=True), ForeignKey("lancamento.id", ondelete="CASCADE"), nullable=False, index=True
     )
     nome: Mapped[str] = mapped_column(String(200), nullable=False)
-    caminho: Mapped[str] = mapped_column(String(300), nullable=False)
+    caminho: Mapped[str | None] = mapped_column(String(300))  # só quando armazenamento = disco
     tipo_mime: Mapped[str] = mapped_column(String(80), nullable=False)
     tamanho: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "disco" (UPLOAD_DIR) ou "bucket" (99dev.pro/bucket); o front nunca vê a URL do bucket — baixa pela API
+    armazenamento: Mapped[str] = mapped_column(String(10), default="disco", server_default="disco", nullable=False)
+    bucket_file_id: Mapped[int | None] = mapped_column(Integer)
+    url_publica: Mapped[str | None] = mapped_column(String(500))
 
     lancamento: Mapped[Lancamento] = relationship(back_populates="anexos")
 
@@ -84,6 +88,7 @@ class Anexo(ModeloBase):
             "nome": self.nome,
             "tipo_mime": self.tipo_mime,
             "tamanho": self.tamanho,
+            "armazenamento": self.armazenamento,
             "url": f"/api/v1/anexos/{self.id}/arquivo",
             "criado_em": iso(self.criado_em),
         }
