@@ -34,6 +34,14 @@ class AtualizarConta(Esquema):
     ano_referencia: int | None = Field(default=None, ge=2000, le=2100)
 
 
+class AtualizarOcorrencia(Esquema):
+    """Ajuste pontual de um mês: valor diferente, vencimento adiado ou "esse mês não tem"."""
+
+    valor_real: Valor | None = None
+    vencimento: date | None = None
+    status: Literal["pendente", "pulada"] | None = None
+
+
 class PagarOcorrencia(Esquema):
     valor_real: Valor
     data: date | None = None

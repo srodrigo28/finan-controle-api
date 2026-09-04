@@ -72,7 +72,11 @@ def lembretes_de_vencimento() -> dict:
         linhas = db.session.execute(
             select(OcorrenciaConta, ContaAgendada)
             .join(ContaAgendada, ContaAgendada.id == OcorrenciaConta.conta_id)
-            .where(ContaAgendada.usuario_id == u.id, OcorrenciaConta.status != "paga")
+            .where(
+                ContaAgendada.usuario_id == u.id,
+                ContaAgendada.ativa.is_(True),
+                OcorrenciaConta.status.not_in(("paga", "pulada")),
+            )
             .order_by(OcorrenciaConta.vencimento)
         ).all()
         atrasadas = [(o, c) for o, c in linhas if o.vencimento < ref]

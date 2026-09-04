@@ -10,7 +10,7 @@ from app.modelos.base import ModeloBase, uuid_pk
 from app.util import data_iso, iso, num, uid
 
 RECORRENCIAS = ("mensal", "semanal", "anual", "unica")
-STATUS_OCORRENCIA = ("pendente", "paga", "atrasada")
+STATUS_OCORRENCIA = ("pendente", "paga", "atrasada", "pulada")
 
 
 class ContaAgendada(ModeloBase):
@@ -74,8 +74,9 @@ class OcorrenciaConta(ModeloBase):
     conta: Mapped[ContaAgendada] = relationship(back_populates="ocorrencias", lazy="joined")
 
     def status_efetivo(self, hoje: date) -> str:
-        if self.status == "paga":
-            return "paga"
+        # "paga" e "pulada" são decisões do usuário; só "pendente" vira "atrasada" pelo calendário.
+        if self.status in ("paga", "pulada"):
+            return self.status
         return "atrasada" if self.vencimento < hoje else "pendente"
 
     def para_dict(self, hoje: date | None = None) -> dict:

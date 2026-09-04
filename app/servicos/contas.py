@@ -11,7 +11,7 @@ from app.erros import ErroApi
 from app.extensoes import db
 from app.modelos import ContaAgendada, Lancamento, OcorrenciaConta
 from app.servicos.tempo import dia_seguro, hoje, limites_mes
-from app.util import dec
+from app.util import data_iso, dec
 
 
 def buscar_conta(usuario_id: uuid.UUID, conta_id: uuid.UUID) -> ContaAgendada:
@@ -59,24 +59,32 @@ def gerar_ocorrencias(usuario_id: uuid.UUID, ano: int, mes: int) -> list[Ocorren
     contas = db.session.scalars(
         select(ContaAgendada).where(ContaAgendada.usuario_id == usuario_id, ContaAgendada.ativa.is_(True))
     ).all()
-    existentes = {
-        (o.conta_id, o.vencimento)
-        for o in db.session.scalars(
-            select(OcorrenciaConta)
-            .join(ContaAgendada)
-            .where(ContaAgendada.usuario_id == usuario_id, OcorrenciaConta.competencia == competencia)
-        ).all()
-    }
-    for conta in contas:
-        for venc in vencimentos_na_competencia(conta, ano, mes):
-            if (conta.id, venc) not in existentes:
-                db.session.add(OcorrenciaConta(conta_id=conta.id, competencia=competencia, vencimento=venc))
-    db.session.flush()
-
-    return db.session.scalars(
+    ja_existem = db.session.scalars(
         select(OcorrenciaConta)
         .join(ContaAgendada)
         .where(ContaAgendada.usuario_id == usuario_id, OcorrenciaConta.competencia == competencia)
+    ).all()
+    por_vencimento = {(o.conta_id, o.vencimento) for o in ja_existem}
+    com_ocorrencia = {o.conta_id for o in ja_existem}
+    for conta in contas:
+        # Semanal gera várias por mês (dedupe por data). As demais geram uma só: se a competência
+        # já tem a ocorrência, não recriar — senão adiar o vencimento faria voltar a data antiga.
+        if conta.recorrencia != "semanal" and conta.id in com_ocorrencia:
+            continue
+        for venc in vencimentos_na_competencia(conta, ano, mes):
+            if (conta.id, venc) not in por_vencimento:
+                db.session.add(OcorrenciaConta(conta_id=conta.id, competencia=competencia, vencimento=venc))
+    db.session.flush()
+
+    # Só contas ativas: conta arquivada some do mês (as ocorrências ficam guardadas para o histórico).
+    return db.session.scalars(
+        select(OcorrenciaConta)
+        .join(ContaAgendada)
+        .where(
+            ContaAgendada.usuario_id == usuario_id,
+            ContaAgendada.ativa.is_(True),
+            OcorrenciaConta.competencia == competencia,
+        )
         .order_by(OcorrenciaConta.vencimento, ContaAgendada.nome)
     ).all()
 
@@ -109,6 +117,47 @@ def pagar_ocorrencia(
     ocorrencia.lancamento_id = lancamento.id
     db.session.flush()
     return lancamento
+
+
+def realinhar_ocorrencias(conta: ContaAgendada) -> int:
+    """Mudou o dia/recorrência: descarta os vencimentos futuros ainda pendentes para o gerador
+    recriá-los na data nova. Pagas ficam (são histórico) e puladas também (decisão do usuário)."""
+    h = hoje()
+    competencia_atual = f"{h.year:04d}-{h.month:02d}"
+    alvo = db.session.scalars(
+        select(OcorrenciaConta).where(
+            OcorrenciaConta.conta_id == conta.id,
+            OcorrenciaConta.status == "pendente",
+            OcorrenciaConta.competencia >= competencia_atual,
+        )
+    ).all()
+    for oc in alvo:
+        db.session.delete(oc)
+    db.session.flush()
+    return len(alvo)
+
+
+def resumo_conta(conta: ContaAgendada) -> dict:
+    """Números que a tela de detalhe usa para decidir o tom das ações (arquivar × excluir)."""
+    ocorrencias = db.session.scalars(
+        select(OcorrenciaConta).where(OcorrenciaConta.conta_id == conta.id)
+    ).all()
+    pagas = [o for o in ocorrencias if o.status == "paga"]
+    ultima = max(pagas, key=lambda o: o.vencimento, default=None)
+    total_pago = sum((o.valor_real or 0) for o in pagas)
+    return {
+        "ocorrencias_total": len(ocorrencias),
+        "pagas": len(pagas),
+        "total_pago": float(total_pago),
+        "media_paga": float(total_pago / len(pagas)) if pagas else None,
+        "ultimo_pagamento": data_iso(ultima.vencimento) if ultima else None,
+    }
+
+
+def excluir_conta(conta: ContaAgendada) -> None:
+    """Apaga a conta e suas ocorrências. Os lançamentos já pagos ficam: a FK é ON DELETE SET NULL."""
+    db.session.delete(conta)
+    db.session.flush()
 
 
 def reabrir_ocorrencia(ocorrencia: OcorrenciaConta) -> None:
