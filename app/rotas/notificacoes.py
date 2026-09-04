@@ -5,9 +5,11 @@ from sqlalchemy import select
 
 from app.erros import ErroApi
 from app.extensoes import db
-from app.modelos import InscricaoPush
+from app.modelos import InscricaoPush, Notificacao
 from app.rotas.auth import usuario_atual
 from app.servicos import notificacoes as svc
+from app.servicos import notificacoes_app as central
+from app.util import parse_uuid, usuario_id
 
 bp = Blueprint("notificacoes", __name__, url_prefix="/notificacoes")
 
@@ -82,3 +84,43 @@ def enviar_lembretes():
         return jsonify({"ativo": False, "usuarios": 0, "enviados": 0})
     resumo = svc.lembretes_de_vencimento()
     return jsonify({"ativo": True, **resumo})
+
+
+# ---------- Central de notificações no app (o sino) ----------
+
+
+@bp.get("")
+@jwt_required()
+def fila():
+    """Reconcilia com o motor de insights e devolve o que ainda vale, atenção primeiro."""
+    usuario = usuario_atual()
+    itens = central.sincronizar(usuario)
+    db.session.commit()
+    return jsonify({
+        "dados": [n.para_dict() for n in itens],
+        "nao_lidas": sum(1 for n in itens if n.lida_em is None),
+    })
+
+
+def _minha_notificacao(nid: str) -> Notificacao:
+    n = db.session.get(Notificacao, parse_uuid(nid))
+    if n is None or n.usuario_id != usuario_id():
+        raise ErroApi("NAO_ENCONTRADO", "Notificação não encontrada.", 404)
+    return n
+
+
+@bp.post("/<nid>/ler")
+@jwt_required()
+def ler(nid: str):
+    n = _minha_notificacao(nid)
+    central.marcar_lida(n)
+    db.session.commit()
+    return jsonify(n.para_dict())
+
+
+@bp.post("/ler-todas")
+@jwt_required()
+def ler_todas():
+    quantas = central.marcar_todas_lidas(usuario_id())
+    db.session.commit()
+    return jsonify({"lidas": quantas, "nao_lidas": central.nao_lidas(usuario_id())})

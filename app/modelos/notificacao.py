@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,3 +35,43 @@ class InscricaoPush(ModeloBase):
 
     def como_assinatura(self) -> dict:
         return {"endpoint": self.endpoint, "keys": {"p256dh": self.p256dh, "auth": self.auth}}
+
+
+class Notificacao(ModeloBase):
+    """Fila da central de notificações do app (o sino).
+
+    A `chave` é o que dá identidade a um aviso: o motor de insights recalcula tudo a cada sincronização,
+    e sem ela o mesmo aviso viraria linha nova toda vez. Com ela, sincronizar é um upsert — cria o que
+    é novo, atualiza o texto do que mudou e fecha (`resolvida_em`) o que deixou de aparecer.
+    A linha **nunca** é apagada: o histórico fica.
+    """
+
+    __tablename__ = "notificacao"
+    __table_args__ = (UniqueConstraint("usuario_id", "chave", name="uq_notificacao_usuario_chave"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    usuario_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuario.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chave: Mapped[str] = mapped_column(String(200), nullable=False)
+    tipo: Mapped[str] = mapped_column(String(40), nullable=False)
+    nivel: Mapped[str] = mapped_column(String(10), default="info", nullable=False)
+    titulo: Mapped[str] = mapped_column(String(200), nullable=False)
+    corpo: Mapped[str | None] = mapped_column(Text)
+    link: Mapped[str | None] = mapped_column(String(200))
+    lida_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolvida_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def para_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "chave": self.chave,
+            "tipo": self.tipo,
+            "nivel": self.nivel,
+            "titulo": self.titulo,
+            "corpo": self.corpo,
+            "link": self.link,
+            "lida": self.lida_em is not None,
+            "resolvida": self.resolvida_em is not None,
+            "criado_em": iso(self.criado_em),
+        }
