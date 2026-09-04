@@ -10,6 +10,7 @@ from app.modelos import ItemCompra, SessaoCompra
 from app.servicos.categorias import categoria_do_usuario
 from app.servicos.sessoes import buscar_sessao, fechar_sessao, sincronizar_sessoes
 from app.util import agora, dec, parse_uuid, usuario_id, validar
+from app.servicos.plano import garantir_plano_ativo
 
 bp = Blueprint("sessoes", __name__, url_prefix="/sessoes")
 
@@ -55,6 +56,9 @@ def abrir():
             if existente.usuario_id != uid:
                 raise ErroApi("CONFLITO", "Id já utilizado.", 409)
             return jsonify(existente.para_dict()), 200  # idempotente
+    # O gate fica aqui, e não no decorator, de propósito: uma sessão que já existe (reenvio do app
+    # offline) precisa passar mesmo com o teste vencido — ela é dado que o usuário já registrou.
+    garantir_plano_ativo()
     sessao = SessaoCompra(usuario_id=uid, **dados.model_dump(exclude_none=True))
     db.session.add(sessao)
     db.session.commit()

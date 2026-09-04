@@ -9,6 +9,7 @@ from app.extensoes import db
 from app.modelos import Categoria
 from app.servicos.categorias import categoria_do_usuario
 from app.util import parse_uuid, usuario_id, validar
+from app.servicos.plano import exige_plano_ativo
 
 bp = Blueprint("categorias", __name__, url_prefix="/categorias")
 
@@ -32,6 +33,7 @@ def listar():
 
 @bp.post("")
 @jwt_required()
+@exige_plano_ativo
 def criar():
     uid = usuario_id()
     dados = validar(CriarCategoria)

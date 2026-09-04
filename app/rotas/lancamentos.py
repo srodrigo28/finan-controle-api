@@ -16,6 +16,7 @@ from app.servicos import bucket
 from app.modelos import Anexo, Lancamento, SessaoCompra
 from app.servicos.categorias import categoria_do_usuario
 from app.util import dec, parse_data, parse_uuid, usuario_id, validar
+from app.servicos.plano import exige_plano_ativo
 
 bp = Blueprint("lancamentos", __name__, url_prefix="")
 
@@ -80,6 +81,7 @@ def listar():
 
 @bp.post("/lancamentos")
 @jwt_required()
+@exige_plano_ativo
 def criar():
     uid = usuario_id()
     dados = validar(CriarLancamento)

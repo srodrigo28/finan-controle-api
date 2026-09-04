@@ -20,6 +20,7 @@ from app.servicos.contas import (
 )
 from app.servicos.tempo import hoje, parse_mes
 from app.util import parse_uuid, usuario_id, validar
+from app.servicos.plano import exige_plano_ativo
 
 bp = Blueprint("contas", __name__, url_prefix="/contas")
 
@@ -36,6 +37,7 @@ def listar():
 
 @bp.post("")
 @jwt_required()
+@exige_plano_ativo
 def criar():
     uid = usuario_id()
     dados = validar(CriarConta)
