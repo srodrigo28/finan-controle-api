@@ -13,6 +13,10 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY app ./app
 COPY migrations ./migrations
+# `scripts/` entra na imagem por causa do checar_smtp.py: o diagnostico do canal de
+# e-mail so vale rodado ONDE a API roda — o .env da maquina de dev nao e o .env.deploy
+# da VPS, e foi essa diferenca que escondeu o problema no SUWAVE.
+COPY scripts ./scripts
 COPY run.py wsgi.py docker-entrypoint.sh ./
 
 RUN adduser --disabled-password --gecos "" appuser \
