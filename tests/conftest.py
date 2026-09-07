@@ -64,12 +64,26 @@ class Api:
         return next(c for c in cats if c["nome"] == nome)
 
 
-def registrar(cliente, email: str | None = None, nome: str = "Teste") -> Api:
+def registrar(cliente, email: str | None = None, nome: str = "Teste", confirmar: bool = True) -> Api:
+    """Cria a conta e, por padrão, confirma o e-mail.
+
+    Sem confirmar, o `before_request` responde 403 EMAIL_NAO_VERIFICADO em tudo
+    fora de `/auth/*` — então quase todo teste precisa da conta já confirmada.
+    O código volta na resposta porque a config de teste liga `TESTING`.
+    """
     email = email or f"{uuid.uuid4().hex[:8]}@teste.com"
     r = cliente.post("/api/v1/auth/registrar", json={"nome": nome, "email": email, "senha": "segredo123"})
     assert r.status_code == 201, r.get_json()
     corpo = r.get_json()
-    return Api(cliente, corpo["access_token"], corpo["usuario"])
+    api = Api(cliente, corpo["access_token"], corpo["usuario"])
+    api.refresh_token = corpo["refresh_token"]
+    api.codigo = corpo["verificacao"]["codigo"]
+    api.url_confirmacao = corpo["verificacao"]["url"]
+    if confirmar:
+        confirmacao = api.post("/auth/email/confirmar-codigo", {"codigo": api.codigo})
+        assert confirmacao.status_code == 200, confirmacao.get_json()
+        api.usuario = confirmacao.get_json()
+    return api
 
 
 @pytest.fixture

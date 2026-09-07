@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from sqlalchemy import DateTime, Numeric, String
+from sqlalchemy import Boolean, DateTime, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.modelos.base import ModeloBase, uuid_pk
@@ -31,6 +31,12 @@ class Usuario(ModeloBase):
     # Plano: "teste" (30 dias gratis, sem cartao) ou "completo". Cobranca ainda nao implementada.
     plano: Mapped[str] = mapped_column(String(20), default="teste", server_default="teste", nullable=False)
     teste_expira_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_fim_do_teste)
+    # Sem e-mail confirmado a conta existe mas não usa o app: o `before_request`
+    # da fábrica barra tudo fora de `/auth/*` com 403 EMAIL_NAO_VERIFICADO.
+    email_verificado: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    email_verificado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
     def dias_restantes_teste(self) -> int | None:
@@ -64,5 +70,7 @@ class Usuario(ModeloBase):
             "teste_expira_em": iso(self.teste_expira_em) if self.teste_expira_em else None,
             "dias_restantes_teste": self.dias_restantes_teste,
             "teste_ativo": self.teste_ativo,
+            "email_verificado": self.email_verificado,
+            "email_verificado_em": iso(self.email_verificado_em) if self.email_verificado_em else None,
             "criado_em": iso(self.criado_em),
         }

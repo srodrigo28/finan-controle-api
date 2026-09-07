@@ -6,3 +6,4 @@ from app.modelos.lancamento import Anexo, Lancamento  # noqa: F401
 from app.modelos.sessao import ItemCompra, PrecoHistorico, SessaoCompra  # noqa: F401
 from app.modelos.conta import ContaAgendada, OcorrenciaConta  # noqa: F401
 from app.modelos.notificacao import InscricaoPush, Notificacao  # noqa: F401
+from app.modelos.verificacao import CodigoVerificacao  # noqa: F401

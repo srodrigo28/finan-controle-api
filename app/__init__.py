@@ -1,12 +1,13 @@
 """Fábrica da aplicação Flask."""
 import logging
 import os
+import uuid
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.config import Config
-from app.erros import registrar_handlers
+from app.erros import ErroApi, registrar_handlers
 from app.extensoes import cors, db, jwt, migrate
 
 PREFIXO_API = "/api/v1"
@@ -58,9 +59,54 @@ def create_app(config: type[Config] | None = None) -> Flask:
     for modulo in (auth, categorias, lancamentos, sessoes, precos, contas, metricas, exportar, notificacoes):
         app.register_blueprint(modulo.bp, url_prefix=PREFIXO_API + modulo.bp.url_prefix)
 
+    _trava_email_verificado(app)
     registrar_handlers(app)
     _handlers_jwt()
     return app
+
+
+def _trava_email_verificado(app: Flask) -> None:
+    """Sem e-mail confirmado, a conta não usa o app.
+
+    Tudo sob `/api/v1/` fica trancado; `/api/v1/auth/*` continua aberto porque é
+    por lá que a pessoa confirma (`/email/*`), recupera a senha (`/senha/*`) e o
+    front lê o próprio perfil (`/eu`) para saber para onde mandar a navegação.
+
+    A checagem vive aqui, e não em cada rota, para não depender de alguém lembrar
+    do decorador ao criar a próxima rota.
+    """
+    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+
+    from app.modelos import Usuario
+
+    livre = PREFIXO_API + "/auth/"
+
+    @app.before_request
+    def _exigir_email_verificado():
+        caminho = request.path
+        if request.method == "OPTIONS" or not caminho.startswith(PREFIXO_API) or caminho.startswith(livre):
+            return None
+        try:
+            verify_jwt_in_request(optional=True)
+            identidade = get_jwt_identity()
+        except Exception:  # noqa: BLE001
+            # Token ausente, expirado ou do tipo errado: quem responde é o
+            # `@jwt_required` da própria rota, com a mensagem certa.
+            return None
+        if not identidade:
+            return None
+        try:
+            usuario = db.session.get(Usuario, uuid.UUID(str(identidade)))
+        except (ValueError, TypeError):
+            return None
+        if usuario is not None and not usuario.email_verificado:
+            return ErroApi(
+                "EMAIL_NAO_VERIFICADO",
+                "Confirme o código que enviamos para o seu e-mail para usar o app.",
+                403,
+                {"email": usuario.email},
+            ).resposta()
+        return None
 
 
 def _handlers_jwt() -> None:

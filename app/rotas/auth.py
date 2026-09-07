@@ -4,9 +4,19 @@ from flask_jwt_extended import create_access_token, create_refresh_token, jwt_re
 from sqlalchemy import select
 
 from app.erros import ErroApi
-from app.esquemas.auth import AtualizarEu, Login, Registrar
+from app.esquemas.auth import (
+    AtualizarEu,
+    ConfirmarCodigo,
+    ConfirmarToken,
+    EsqueciSenha,
+    Login,
+    RedefinirSenha,
+    Registrar,
+)
 from app.extensoes import db
 from app.modelos import Usuario
+from app.servicos import senha as servico_senha
+from app.servicos import verificacao as servico_verificacao
 from app.servicos.categorias import criar_categorias_padrao
 from app.util import usuario_id, validar
 
@@ -41,7 +51,10 @@ def registrar():
     db.session.flush()
     criar_categorias_padrao(usuario.id)
     db.session.commit()
-    return jsonify(_tokens(usuario)), 201
+    # A conta nasce com `email_verificado = false`: os tokens saem daqui só para
+    # a tela do código conseguir chamar `/email/confirmar-codigo`. Todo o resto
+    # da API responde 403 EMAIL_NAO_VERIFICADO até a confirmação.
+    return jsonify({**_tokens(usuario), "verificacao": servico_verificacao.emitir_codigo(usuario)}), 201
 
 
 @bp.post("/login")
@@ -58,6 +71,52 @@ def login():
 def refresh():
     usuario = usuario_atual()
     return jsonify({"access_token": create_access_token(identity=str(usuario.id))})
+
+
+@bp.post("/email/enviar-codigo")
+@jwt_required()
+def enviar_codigo():
+    """Reenvia o código. Cooldown de 60 s → 429 AGUARDE_REENVIO."""
+    return jsonify(servico_verificacao.emitir_codigo(usuario_atual()))
+
+
+@bp.post("/email/confirmar-codigo")
+@jwt_required()
+def confirmar_codigo():
+    """Exige sessão de propósito: o código pertence a uma conta específica.
+
+    Sem o JWT a rota aceitaria "e-mail + código" de qualquer um, virando um
+    oráculo para testar códigos contra endereços alheios. Quem chega aqui acabou
+    de se cadastrar e já tem token.
+    """
+    dados = validar(ConfirmarCodigo)
+    return jsonify(servico_verificacao.confirmar_por_codigo(usuario_atual(), dados.codigo))
+
+
+@bp.post("/email/confirmar")
+def confirmar_email():
+    """Confirmação pelo link do e-mail — anônima: quem clica pode estar em outro aparelho."""
+    dados = validar(ConfirmarToken)
+    return jsonify(servico_verificacao.confirmar_por_token(dados.token))
+
+
+@bp.post("/senha/esqueci")
+def esqueci_senha():
+    """Responde 200 mesmo se o e-mail não existir — diferenciar entregaria a lista de quem tem conta."""
+    dados = validar(EsqueciSenha)
+    resultado = servico_senha.esqueci(dados.email)
+    corpo = {"mensagem": "Se este e-mail tiver uma conta, enviamos o link de redefinição."}
+    if resultado.get("url"):  # só em TESTING
+        corpo["url"] = resultado["url"]
+    return jsonify(corpo)
+
+
+@bp.post("/senha/redefinir")
+def redefinir_senha():
+    """Troca a senha e já devolve a sessão: quem redefiniu não precisa digitar de novo."""
+    dados = validar(RedefinirSenha)
+    usuario = servico_senha.redefinir(dados.token, dados.senha)
+    return jsonify(_tokens(usuario))
 
 
 @bp.get("/eu")

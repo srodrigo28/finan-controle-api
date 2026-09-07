@@ -1,7 +1,9 @@
 """Funções utilitárias compartilhadas."""
 from __future__ import annotations
 
+import hashlib
 import re
+import secrets
 import unicodedata
 import uuid
 from datetime import date, datetime, timezone
@@ -25,6 +27,26 @@ def normalizar_descricao(texto: str) -> str:
     """lower, sem acento, espaços colapsados."""
     sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"\s+", " ", sem_acento).strip().lower()
+
+
+def gerar_token() -> str:
+    """Token opaco para links de e-mail (confirmação e redefinição de senha)."""
+    return secrets.token_urlsafe(32)
+
+
+def gerar_codigo(digitos: int = 4) -> str:
+    """Código numérico com zeros à esquerda preservados.
+
+    `secrets` e não `random`: o segundo é previsível a partir da sequência já
+    observada, e aqui o valor guarda o acesso a uma conta.
+    """
+    return str(secrets.randbelow(10**digitos)).zfill(digitos)
+
+
+def hash_token(valor: str) -> str:
+    """SHA-256 do código/token. O banco nunca guarda o valor em claro — quem lê
+    a tabela não pode confirmar conta nem trocar a senha de ninguém."""
+    return hashlib.sha256(valor.encode("utf-8")).hexdigest()
 
 
 def dec(valor: Any, casas: int = 2) -> Decimal:
