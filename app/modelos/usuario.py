@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from sqlalchemy import Boolean, DateTime, Numeric, String
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.modelos.base import ModeloBase, uuid_pk
@@ -37,6 +37,8 @@ class Usuario(ModeloBase):
         Boolean, default=False, server_default="false", nullable=False
     )
     email_verificado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Incrementado ao redefinir a senha para invalidar access/refresh tokens anteriores.
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
     @property
     def dias_restantes_teste(self) -> int | None:

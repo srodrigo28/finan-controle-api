@@ -12,7 +12,7 @@ from app.esquemas.sessao import SessaoSincronizacao
 from app.extensoes import db
 from app.modelos import Categoria, ItemCompra, Lancamento, PrecoHistorico, SessaoCompra
 from app.servicos.categorias import categoria_do_usuario
-from app.servicos.tempo import hoje
+from app.servicos.tempo import fuso, hoje
 from app.util import agora, dec, normalizar_descricao
 
 
@@ -50,7 +50,9 @@ def fechar_sessao(
     categoria_do_usuario(usuario_id, categoria_id)
     categoria_final = categoria_id or _categoria_mercado(usuario_id)
     quando = fechada_em or agora()
-    data = quando.astimezone(timezone.utc).date() if fechada_em else hoje()
+    # O produto agrupa lançamentos pelo dia civil de São Paulo, inclusive quando
+    # o fechamento offline chega depois da meia-noite UTC.
+    data = quando.astimezone(fuso()).date() if fechada_em else hoje()
 
     descricao = f"Mercado — {sessao.local}" if sessao.local else "Compra de mercado"
     lancamento = Lancamento(

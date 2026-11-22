@@ -110,6 +110,21 @@ def _trava_email_verificado(app: Flask) -> None:
 
 
 def _handlers_jwt() -> None:
+    @jwt.token_in_blocklist_loader
+    def _versao_auth_revogada(cabecalho, dados):
+        """Tokens emitidos antes da troca de senha deixam de valer."""
+        from app.modelos import Usuario
+
+        usuario_id = dados.get("sub")
+        versao = dados.get("auth_version")
+        if not usuario_id or versao is None:
+            return False
+        try:
+            usuario = db.session.get(Usuario, uuid.UUID(str(usuario_id)))
+        except (ValueError, TypeError):
+            return True
+        return usuario is None or int(versao) != int(usuario.auth_version)
+
     def _erro(codigo: str, mensagem: str, status: int):
         return jsonify({"erro": {"codigo": codigo, "mensagem": mensagem, "detalhes": {}}}), status
 

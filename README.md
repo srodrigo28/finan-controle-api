@@ -44,7 +44,7 @@ Na VPS a API é publicada em `https://99dev.pro/finan-api/` (nginx envia `X-Forw
 
 ## E-mail (confirmação de cadastro e senha)
 
-Padrão 99dev — desenho e motivos em `../docs/prompts/6-setembro-validacao-smtp-esqueci-senha.md`.
+Padrão 99dev — desenho e motivos em `../docs/prompts/2026-09/6-setembro-validacao-smtp-esqueci-senha.md`.
 
 `MAIL_HOST` vazio (padrão em dev) faz a API **só logar** o e-mail, com o link no log — dá para seguir o fluxo
 inteiro sem SMTP. `EMAIL_VERIFICATION_TEST_CODE=1234` confirma qualquer conta (é o que o e2e do front usa);

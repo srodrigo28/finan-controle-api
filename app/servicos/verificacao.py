@@ -1,7 +1,7 @@
 """Confirmação de e-mail no cadastro: código de 4 dígitos + link, padrão 99dev.
 
 Molde: `app/services/email_verification_service.py` do SUWAVE.
-Ver `docs/prompts/6-setembro-validacao-smtp-esqueci-senha.md`.
+Ver `docs/prompts/2026-09/6-setembro-validacao-smtp-esqueci-senha.md`.
 """
 import secrets
 from datetime import timedelta

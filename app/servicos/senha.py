@@ -1,7 +1,7 @@
 """Esqueci minha senha: link com token opaco, uso único.
 
 Molde: `auth_service.forgot_password` / `reset_password` do SUWAVE.
-Ver `docs/prompts/6-setembro-validacao-smtp-esqueci-senha.md`.
+Ver `docs/prompts/2026-09/6-setembro-validacao-smtp-esqueci-senha.md`.
 
 **Por que link e não código de 4 dígitos.** Esta rota é anônima. Uma rota anônima
 que aceitasse "e-mail + 4 dígitos" viraria um oráculo para testar códigos contra
@@ -82,6 +82,7 @@ def redefinir(token: str, nova_senha: str) -> Usuario:
         raise ErroApi("NAO_ENCONTRADO", "Usuário não encontrado.", 404)
 
     usuario.definir_senha(nova_senha)
+    usuario.auth_version += 1
     # Quem chegou aqui provou que lê a caixa de entrada — a conta fica confirmada
     # de tabela, e ninguém trava na tela do código depois de redefinir a senha.
     if not usuario.email_verificado:

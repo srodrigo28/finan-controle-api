@@ -1,7 +1,7 @@
 """Envio de e-mail por SMTP — padrão 99dev.
 
 Molde: `d:\\prod\\suwave-app\\project\\app\\api\\app\\services\\email_service.py`.
-Ver `docs/prompts/6-setembro-validacao-smtp-esqueci-senha.md`.
+Ver `docs/prompts/2026-09/6-setembro-validacao-smtp-esqueci-senha.md`.
 
 Duas regras que vêm de problema real:
 

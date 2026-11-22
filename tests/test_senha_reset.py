@@ -41,12 +41,20 @@ def test_fluxo_feliz_troca_a_senha(cliente):
     assert r.status_code == 200
     # Já devolve a sessão: quem redefiniu não precisa digitar a senha de novo.
     assert r.get_json()["access_token"] and r.get_json()["usuario"]["email"] == "ana@teste.com"
-
     assert cliente.post("/api/v1/auth/login", json={"email": "ana@teste.com", "senha": NOVA}).status_code == 200
     antiga = cliente.post("/api/v1/auth/login", json={"email": "ana@teste.com", "senha": "segredo123"})
     assert antiga.status_code == 401
     assert api.usuario["email"] == "ana@teste.com"
 
+
+def test_redefinir_senha_revoga_tokens_anteriores(cliente):
+    api = registrar(cliente, email="revoga@teste.com")
+    access_antigo, refresh_antigo = api.token, api.refresh_token
+    token = _token(_pedir_link(cliente, "revoga@teste.com"))
+    r = cliente.post("/api/v1/auth/senha/redefinir", json={"token": token, "senha": NOVA})
+    assert r.status_code == 200
+    assert cliente.get("/api/v1/auth/eu", headers={"Authorization": f"Bearer {access_antigo}"}).status_code == 401
+    assert cliente.post("/api/v1/auth/refresh", headers={"Authorization": f"Bearer {refresh_antigo}"}).status_code == 401
 
 def test_email_com_maiusculas_e_espacos_acha_a_conta(cliente):
     registrar(cliente, email="bia@teste.com")

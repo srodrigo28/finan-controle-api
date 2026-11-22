@@ -27,8 +27,8 @@ def _tokens(usuario: Usuario) -> dict:
     ident = str(usuario.id)
     return {
         "usuario": usuario.para_dict(),
-        "access_token": create_access_token(identity=ident),
-        "refresh_token": create_refresh_token(identity=ident),
+        "access_token": create_access_token(identity=ident, additional_claims={"auth_version": usuario.auth_version}),
+        "refresh_token": create_refresh_token(identity=ident, additional_claims={"auth_version": usuario.auth_version}),
     }
 
 
@@ -70,7 +70,7 @@ def login():
 @jwt_required(refresh=True)
 def refresh():
     usuario = usuario_atual()
-    return jsonify({"access_token": create_access_token(identity=str(usuario.id))})
+    return jsonify({"access_token": create_access_token(identity=str(usuario.id), additional_claims={"auth_version": usuario.auth_version})})
 
 
 @bp.post("/email/enviar-codigo")

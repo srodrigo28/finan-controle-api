@@ -68,6 +68,22 @@ def test_abrir_com_id_do_cliente_e_idempotente(api):
     assert len(api.get(f"/sessoes/{sid}").get_json()["itens"]) == 1
 
 
+def test_fechar_offline_respeita_dia_civil_de_sao_paulo(api):
+    """01:30 UTC ainda é 22:30 do dia anterior no fuso do produto.
+
+    Vai pela sincronização porque é o único caminho que leva `fechada_em` ao serviço. A primeira
+    versão (09/09) usava POST /fechar, que ignora `fechada_em` e grava `hoje()`: só passava no
+    próprio dia 09/09 (docs/spec/ERROS.md, E002).
+    """
+    sid = str(uuid.uuid4())
+    fechada_em = datetime(2026, 9, 10, 1, 30, tzinfo=timezone.utc)
+    carga = {"sessoes": [{"id": sid, "status": "fechada", "fechada_em": fechada_em.isoformat(), "total_pago": 0, "itens": []}]}
+    resposta = api.post("/sessoes/sincronizar", carga)
+    assert resposta.status_code == 200, resposta.get_json()
+    lancamento_id = resposta.get_json()["sessoes"][0]["lancamento_id"]
+    assert api.get(f"/lancamentos/{lancamento_id}").get_json()["data"] == "2026-09-09"
+
+
 def test_abandonar(api):
     sid = api.post("/sessoes", {}).get_json()["id"]
     assert api.post(f"/sessoes/{sid}/abandonar").status_code == 204
