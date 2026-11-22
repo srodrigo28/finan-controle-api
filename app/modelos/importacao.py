@@ -9,8 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.modelos.base import ModeloBase, uuid_pk
 from app.util import iso
 
-# recebida → lendo → revisar → concluida | erro (dá para reler) | descartada (o original fica guardado)
-ESTADOS = ("recebida", "lendo", "revisar", "concluida", "erro", "descartada")
+# recebida → [senha →] lendo → revisar → concluida | erro (dá para reler) | descartada (o original fica guardado)
+# `senha`: PDF protegido esperando a senha do usuário (POST /importacoes/<id>/senha); nada foi cobrado.
+ESTADOS = ("recebida", "senha", "lendo", "revisar", "concluida", "erro", "descartada")
 
 
 class Importacao(ModeloBase):

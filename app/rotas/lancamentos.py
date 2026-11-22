@@ -13,8 +13,9 @@ from app.erros import ErroApi, nao_encontrado
 from app.esquemas.lancamento import AtualizarLancamento, CriarLancamento
 from app.extensoes import db
 from app.servicos import bucket
-from app.modelos import Anexo, Lancamento, SessaoCompra
+from app.modelos import Anexo, Importacao, Lancamento, SessaoCompra
 from app.servicos.categorias import categoria_do_usuario
+from app.servicos.importacoes import caminho_arquivo as caminho_original
 from app.util import dec, parse_data, parse_uuid, usuario_id, validar
 from app.servicos.plano import exige_plano_ativo
 
@@ -131,6 +132,8 @@ def excluir(lid: str):
 # ---------- Anexos ----------
 
 def _remover_arquivo(anexo: Anexo) -> None:
+    if anexo.armazenamento == "importacao":
+        return  # o arquivo é o original da importação: fica guardado
     if anexo.armazenamento == "bucket":
         if anexo.bucket_file_id:
             bucket.apagar(anexo.bucket_file_id)  # best-effort
@@ -217,6 +220,16 @@ def excluir_anexo(aid: str):
 @jwt_required()
 def baixar_anexo(aid: str):
     anexo = _buscar_anexo(aid)
+    if anexo.armazenamento == "importacao":
+        imp = db.session.get(Importacao, anexo.importacao_id) if anexo.importacao_id else None
+        caminho = caminho_original(imp) if imp else ""
+        if not caminho or not os.path.isfile(caminho):
+            raise nao_encontrado("Arquivo do anexo")
+        resposta = send_file(caminho, mimetype=anexo.tipo_mime, download_name=anexo.nome, as_attachment=False)
+        # Mesmo cuidado do original da importação: extrato e fatura são dados sensíveis.
+        resposta.headers["Cache-Control"] = "private, no-store"
+        resposta.headers["X-Content-Type-Options"] = "nosniff"
+        return resposta
     if anexo.armazenamento == "bucket":
         if not anexo.url_publica:
             raise nao_encontrado("Arquivo do anexo")

@@ -26,7 +26,7 @@ def leitor(monkeypatch):
     estado = {"linhas": [], "erro": None, "chamadas": []}
 
     def falso(conteudo, mime, categorias, hoje):
-        estado["chamadas"].append({"mime": mime, "categorias": categorias, "hoje": hoje, "tamanho": len(conteudo)})
+        estado["chamadas"].append({"mime": mime, "categorias": categorias, "hoje": hoje, "tamanho": len(conteudo), "conteudo": conteudo})
         if estado["erro"]:
             raise ErroLeitura(estado["erro"])
         return Leitura(
@@ -164,6 +164,45 @@ def test_leitura_presa_vira_erro(api, leitor, app):
     assert api.get(f"/importacoes/{imp['id']}").get_json()["estado"] == "erro"
 
 
+def test_confirmar_anexa_o_original_a_cada_lancamento(api, leitor):
+    """O original vira anexo de cada lançamento criado, sem cópia: o mesmo arquivo da importação."""
+    leitor["linhas"] = [_linha(), _linha(valor_centavos=1500, descricao="Padaria")]
+    imp = _enviar(api).get_json()
+    lancs = api.post(f"/importacoes/{imp['id']}/confirmar").get_json()["lancamentos"]
+    assert len(lancs) == 2
+    for lanc in lancs:
+        assert len(lanc["anexos"]) == 1
+        anexo = lanc["anexos"][0]
+        assert (anexo["armazenamento"], anexo["nome"], anexo["tipo_mime"], anexo["importacao_id"]) == (
+            "importacao", "cupom.png", "image/png", imp["id"],
+        )
+        arq = api.get(f"/anexos/{anexo['id']}/arquivo")
+        assert arq.status_code == 200 and arq.data == PNG
+        assert "no-store" in arq.headers["Cache-Control"]
+    # confirmar de novo não duplica o anexo
+    de_novo = api.post(f"/importacoes/{imp['id']}/confirmar").get_json()["lancamentos"]
+    assert all(len(l["anexos"]) == 1 for l in de_novo)
+
+
+def test_excluir_anexo_ou_lancamento_nao_apaga_o_original(api, leitor):
+    leitor["linhas"] = [_linha(), _linha(valor_centavos=1500, descricao="Padaria")]
+    imp = _enviar(api).get_json()
+    lancs = api.post(f"/importacoes/{imp['id']}/confirmar").get_json()["lancamentos"]
+
+    assert api.delete(f"/anexos/{lancs[0]['anexos'][0]['id']}").status_code == 204
+    assert api.get(f"/importacoes/{imp['id']}/arquivo").data == PNG
+    assert api.delete(f"/lancamentos/{lancs[1]['id']}").status_code == 204
+    assert api.get(f"/importacoes/{imp['id']}/arquivo").data == PNG
+
+
+def test_anexo_da_importacao_de_outro_usuario_da_404(api, outro_api, leitor):
+    leitor["linhas"] = [_linha()]
+    imp = _enviar(api).get_json()
+    anexo = api.post(f"/importacoes/{imp['id']}/confirmar").get_json()["lancamentos"][0]["anexos"][0]
+    assert outro_api.get(f"/anexos/{anexo['id']}/arquivo").status_code == 404
+    assert outro_api.delete(f"/anexos/{anexo['id']}").status_code == 404
+
+
 def test_exportacao_json_leva_importacao_id(api, leitor):
     leitor["linhas"] = [_linha()]
     imp = _enviar(api).get_json()
@@ -234,3 +273,91 @@ def test_data_de_referencia_e_o_dia_de_sao_paulo(api, leitor, monkeypatch):
     leitor["linhas"] = [_linha()]
     _enviar(api)
     assert leitor["chamadas"][0]["hoje"] == date(2026, 1, 1)
+
+
+# ---------- PDF com senha (F6b) ----------
+
+def _pdf(senha_usuario: str | None = None, senha_dono: str | None = None) -> bytes:
+    from pypdf import PdfWriter
+
+    w = PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    if senha_usuario is not None:
+        w.encrypt(user_password=senha_usuario, owner_password=senha_dono or "dono-123", algorithm="AES-256")
+    saida = io.BytesIO()
+    w.write(saida)
+    return saida.getvalue()
+
+
+def _protegido(conteudo: bytes) -> bool:
+    from pypdf import PdfReader
+
+    return PdfReader(io.BytesIO(conteudo)).is_encrypted
+
+
+def _enviar_pdf(api, conteudo: bytes):
+    return _enviar(api, conteudo=conteudo, nome="extrato.pdf", mime="application/pdf")
+
+
+def test_pdf_com_senha_espera_a_senha_sem_chamar_a_ia(api, leitor):
+    pdf = _pdf("12345")
+    r = _enviar_pdf(api, pdf)
+    assert r.status_code == 202, r.get_json()
+    imp = r.get_json()
+    assert imp["estado"] == "senha" and imp["tentativas"] == 0
+    assert leitor["chamadas"] == []
+    # o original guardado é o arquivo protegido, intacto
+    assert api.get(f"/importacoes/{imp['id']}/arquivo").data == pdf
+
+
+def test_senha_errada_da_422_e_nao_gasta_leitura(api, leitor):
+    imp = _enviar_pdf(api, _pdf("12345")).get_json()
+    r = api.post(f"/importacoes/{imp['id']}/senha", {"senha": "99999"})
+    assert r.status_code == 422 and r.get_json()["erro"]["codigo"] == "SENHA_INCORRETA", r.get_json()
+    detalhe = api.get(f"/importacoes/{imp['id']}").get_json()
+    assert (detalhe["estado"], detalhe["tentativas"]) == ("senha", 0)
+    assert leitor["chamadas"] == []
+
+
+def test_senha_certa_le_a_copia_aberta_e_nao_grava_a_senha(api, leitor, app):
+    from app.extensoes import db
+
+    leitor["linhas"] = [_linha()]
+    pdf = _pdf("12345")
+    imp = _enviar_pdf(api, pdf).get_json()
+    r = api.post(f"/importacoes/{imp['id']}/senha", {"senha": "12345"})
+    assert r.status_code == 202, r.get_json()
+    assert api.get(f"/importacoes/{imp['id']}").get_json()["estado"] == "revisar"
+    # a IA recebeu um PDF sem senha; o original continua protegido
+    assert len(leitor["chamadas"]) == 1 and not _protegido(leitor["chamadas"][0]["conteudo"])
+    assert api.get(f"/importacoes/{imp['id']}/arquivo").data == pdf
+    with app.app_context():
+        linha = db.session.execute(db.text("SELECT row_to_json(i)::text FROM importacao i WHERE id = :i"), {"i": imp["id"]}).scalar()
+    assert "12345" not in linha
+
+
+def test_pdf_so_com_senha_de_dono_le_direto(api, leitor):
+    """Senha de abertura vazia (só restrição de impressão/cópia): o usuário não precisa digitar nada."""
+    leitor["linhas"] = [_linha()]
+    imp = _enviar_pdf(api, _pdf("")).get_json()
+    assert imp["estado"] == "revisar"
+    assert not _protegido(leitor["chamadas"][0]["conteudo"])
+
+
+def test_reler_pdf_com_senha_pede_a_senha_de_novo(api, leitor):
+    leitor["erro"] = "A leitura por IA falhou. Tente de novo."
+    imp = _enviar_pdf(api, _pdf("12345")).get_json()
+    assert api.post(f"/importacoes/{imp['id']}/senha", {"senha": "12345"}).status_code == 202
+    assert api.get(f"/importacoes/{imp['id']}").get_json()["estado"] == "erro"
+    leitor["erro"] = None
+    r = api.post(f"/importacoes/{imp['id']}/reler")
+    assert r.status_code == 202 and r.get_json()["estado"] == "senha"
+    assert len(leitor["chamadas"]) == 1
+
+
+def test_senha_fora_do_estado_ou_vazia(api, leitor):
+    leitor["linhas"] = [_linha()]
+    imp = _enviar(api).get_json()  # PNG, já em revisão
+    assert api.post(f"/importacoes/{imp['id']}/senha", {"senha": "1"}).status_code == 409
+    protegido = _enviar_pdf(api, _pdf("12345")).get_json()
+    assert api.post(f"/importacoes/{protegido['id']}/senha", {"senha": ""}).status_code == 422

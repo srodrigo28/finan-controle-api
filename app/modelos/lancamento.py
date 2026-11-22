@@ -79,10 +79,15 @@ class Anexo(ModeloBase):
     caminho: Mapped[str | None] = mapped_column(String(300))  # só quando armazenamento = disco
     tipo_mime: Mapped[str] = mapped_column(String(80), nullable=False)
     tamanho: Mapped[int] = mapped_column(Integer, nullable=False)
-    # "disco" (UPLOAD_DIR) ou "bucket" (99dev.pro/bucket); o front nunca vê a URL do bucket — baixa pela API
+    # "disco" (UPLOAD_DIR), "bucket" (99dev.pro/bucket) ou "importacao" (original da importação); o front nunca vê a URL do bucket — baixa pela API
     armazenamento: Mapped[str] = mapped_column(String(10), default="disco", server_default="disco", nullable=False)
     bucket_file_id: Mapped[int | None] = mapped_column(Integer)
     url_publica: Mapped[str | None] = mapped_column(String(500))
+    # armazenamento = "importacao": o arquivo é o ORIGINAL da importação (sem cópia). Excluir o anexo
+    # só desfaz a ligação; o original continua guardado na importação.
+    importacao_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("importacao.id", ondelete="CASCADE"), index=True
+    )
 
     lancamento: Mapped[Lancamento] = relationship(back_populates="anexos")
 
@@ -94,6 +99,7 @@ class Anexo(ModeloBase):
             "tipo_mime": self.tipo_mime,
             "tamanho": self.tamanho,
             "armazenamento": self.armazenamento,
+            "importacao_id": uid(self.importacao_id),
             "url": f"/api/v1/anexos/{self.id}/arquivo",
             "criado_em": iso(self.criado_em),
         }

@@ -47,7 +47,7 @@ SAIDAS: dict[str, dict[str, Any]] = {
         "ordem": {"type": "integer"}, "criado_em": TS}},
     "Anexo": {"type": "object", "properties": {
         "id": UUID, "lancamento_id": UUID, "nome": {"type": "string"}, "tipo_mime": {"type": "string"},
-        "tamanho": {"type": "integer"}, "armazenamento": {"type": "string", "enum": ["disco", "bucket"]}, "url": {"type": "string", "description": "sempre via API (o Bucket nunca é exposto ao cliente)"}, "criado_em": TS}},
+        "tamanho": {"type": "integer"}, "armazenamento": {"type": "string", "enum": ["disco", "bucket", "importacao"], "description": "importacao = o original da importação por IA, sem cópia; excluir o anexo não apaga o original"}, "importacao_id": {**UUID, "nullable": True}, "url": {"type": "string", "description": "sempre via API (o Bucket nunca é exposto ao cliente)"}, "criado_em": TS}},
     "Item": {"type": "object", "properties": {
         "id": UUID, "sessao_id": UUID, "descricao": {"type": "string"}, "categoria_id": {**UUID, "nullable": True},
         "valor_unitario": VALOR, "quantidade": {"type": "number", "example": 1.5}, "subtotal": VALOR,
@@ -62,7 +62,7 @@ SAIDAS: dict[str, dict[str, Any]] = {
         "itens": {"type": "array", "items": {"$ref": REF.format(model="Item")}},
         "criado_em": TS, "atualizado_em": TS}},
     "Importacao": {"type": "object", "properties": {
-        "id": UUID, "estado": {"type": "string", "enum": ["recebida", "lendo", "revisar", "concluida", "erro", "descartada"]},
+        "id": UUID, "estado": {"type": "string", "enum": ["recebida", "senha", "lendo", "revisar", "concluida", "erro", "descartada"]},
         "tipo_documento": {"type": "string", "nullable": True, "enum": ["cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "comprovante", "outro", None]},
         "nome": {"type": "string"}, "tipo_mime": {"type": "string"}, "tamanho": {"type": "integer"},
         "url": {"type": "string", "description": "original, só via API com JWT"},
@@ -232,6 +232,12 @@ def montar_spec(servidor: str) -> dict[str, Any]:
         },
         f"{v1}/importacoes/{{id}}/arquivo": {"get": _op("Importação por IA", "Baixar o original (autenticado, sem cache)", {"200": {"description": "Binário", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}, params=[P_ID])},
         f"{v1}/importacoes/{{id}}/confirmar": {"post": _op("Importação por IA", "Criar os lançamentos marcados (idempotente; aceita {linhas} opcional)", _resp({"type": "object", "properties": {"importacao": _ref("Importacao"), "lancamentos": {"type": "array", "items": _ref("Lancamento")}}}), _corpo(importacao.AtualizarRascunho), [P_ID])},
+        f"{v1}/importacoes/{{id}}/senha": {"post": _op(
+            "Importação por IA", "Senha do PDF protegido (abre uma cópia só para a leitura; não é guardada)",
+            _resp(_ref("Importacao"), "Aceito", "202"), params=[P_ID],
+            corpo={"required": True, "content": {"application/json": {"schema": {
+                "type": "object", "required": ["senha"], "properties": {"senha": {"type": "string", "maxLength": 128}}}}}},
+            descricao="Só em `senha`. 422 `SENHA_INCORRETA` não gasta leitura; 409 fora do estado.")},
         f"{v1}/importacoes/{{id}}/reler": {"post": _op("Importação por IA", "Ler de novo um documento que falhou (até 3 leituras)", _resp(_ref("Importacao"), "Aceito", "202"), params=[P_ID])},
         f"{v1}/importacoes/{{id}}/descartar": {"post": _op("Importação por IA", "Descartar o rascunho (o original fica guardado)", _resp(_ref("Importacao")), params=[P_ID])},
 

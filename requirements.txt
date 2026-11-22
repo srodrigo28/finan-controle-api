@@ -13,3 +13,4 @@ requests>=2.32,<3
 pywebpush>=2,<3
 anthropic>=2.12,<3
 pillow>=11,<13
+pypdf>=5,<7

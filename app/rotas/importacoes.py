@@ -86,6 +86,17 @@ def reler(iid: str):
     return jsonify(imp.para_dict()), 202
 
 
+@bp.post("/importacoes/<iid>/senha")
+@jwt_required()
+def senha(iid: str):
+    """Senha do PDF protegido: abre uma cópia só para a leitura e não é guardada."""
+    imp = _buscar(iid, travar=True)
+    corpo = request.get_json(silent=True) or {}
+    valor = corpo.get("senha")
+    servico.informar_senha(imp, valor if isinstance(valor, str) else "")
+    return jsonify(imp.para_dict()), 202
+
+
 @bp.post("/importacoes/<iid>/descartar")
 @jwt_required()
 def descartar(iid: str):

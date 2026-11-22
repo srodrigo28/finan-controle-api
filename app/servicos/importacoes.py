@@ -20,8 +20,8 @@ from werkzeug.utils import secure_filename
 from app.erros import ErroApi, nao_encontrado
 from app.esquemas.importacao import LinhaRascunho
 from app.extensoes import db
-from app.modelos import Categoria, Importacao, Lancamento
-from app.servicos import leitor_ia
+from app.modelos import Anexo, Categoria, Importacao, Lancamento
+from app.servicos import leitor_ia, pdf
 from app.servicos.categorias import categoria_do_usuario
 from app.servicos.tempo import fuso, hoje
 from app.util import agora, dec, iso, num
@@ -146,18 +146,42 @@ def criar(uid: uuid.UUID, arquivo: FileStorage | None, forcar: bool = False) -> 
 
 # ---------- ler ----------
 
-def disparar_leitura(imp: Importacao) -> None:
-    """Thread no gunicorn (o nginx corta em 60 s); inline nos testes."""
+def _conteudo_para_leitura(imp: Importacao, senha: str | None) -> bytes | None:
+    """PDF protegido → cópia aberta em memória. None = falta a senha (ou ela não abre)."""
+    with open(caminho_arquivo(imp), "rb") as f:
+        conteudo = f.read()
+    if imp.tipo_mime != "application/pdf" or not pdf.esta_protegido(conteudo):
+        return conteudo
+    # Senha vazia abre o PDF que só restringe impressão/cópia: o usuário não precisa digitar nada.
+    return pdf.abrir(conteudo, senha if senha is not None else "")
+
+
+def disparar_leitura(imp: Importacao, senha: str | None = None) -> None:
+    """Thread no gunicorn (o nginx corta em 60 s); inline nos testes.
+
+    PDF com senha sem a senha certa: `senha` informada e errada dá 422; sem senha, a importação
+    espera em `senha` (nada é cobrado). A senha nunca sai desta função: o que segue é a cópia aberta."""
+    try:
+        conteudo = _conteudo_para_leitura(imp, senha)
+    except OSError as e:
+        raise nao_encontrado("Arquivo original") from e
+    if conteudo is None:
+        if senha is not None:
+            raise ErroApi("SENHA_INCORRETA", "Essa senha não abre o PDF. Confira e tente de novo.", 422)
+        imp.estado = "senha"
+        imp.erro = None
+        db.session.commit()
+        return
     imp.estado = "lendo"
     imp.erro = None
     imp.tentativas = (imp.tentativas or 0) + 1
     db.session.commit()
     app = current_app._get_current_object()
     if app.config.get("TESTING"):
-        _ler(app, imp.id)
+        _ler(app, imp.id, conteudo)
         db.session.expire_all()
         return
-    threading.Thread(target=_ler, args=(app, imp.id), daemon=True).start()
+    threading.Thread(target=_ler, args=(app, imp.id, conteudo), daemon=True).start()
 
 
 def _categorias(uid: uuid.UUID) -> list[dict]:
@@ -189,18 +213,16 @@ def _linha_do_rascunho(lida, categorias_validas: set[str], ref: date) -> dict:
     }
 
 
-def _ler(app, iid: uuid.UUID) -> None:
+def _ler(app, iid: uuid.UUID, conteudo: bytes) -> None:
     with app.app_context():
         try:
             imp = db.session.get(Importacao, iid)
             if imp is None or imp.estado != "lendo":
                 return
-            usuario, caminho, mime = imp.usuario_id, caminho_arquivo(imp), imp.tipo_mime
+            usuario, mime = imp.usuario_id, imp.tipo_mime
             db.session.commit()  # não segura transação aberta durante a chamada à IA
             novos: dict
             try:
-                with open(caminho, "rb") as f:
-                    conteudo = f.read()
                 categorias = _categorias(usuario)
                 ref = hoje()
                 leitura = leitor_ia.ler_documento(conteudo, mime, categorias, ref)
@@ -241,6 +263,18 @@ def reler(imp: Importacao) -> None:
     if not leitor_ia.configurado():
         raise ErroApi("IA_INDISPONIVEL", "A leitura de documentos por IA não está disponível agora.", 503)
     disparar_leitura(imp)
+
+
+def informar_senha(imp: Importacao, senha: str) -> None:
+    if imp.estado != "senha":
+        raise ErroApi("ESTADO_INVALIDO", "Este documento não está esperando senha.", 409, {"estado": imp.estado})
+    if not senha or len(senha) > 128:
+        raise ErroApi("VALIDACAO", "Informe a senha do PDF.", 422)
+    if (imp.tentativas or 0) >= MAX_TENTATIVAS:
+        raise ErroApi("LIMITE_TENTATIVAS", f"Este documento já foi lido {MAX_TENTATIVAS} vezes.", 429)
+    if not leitor_ia.configurado():
+        raise ErroApi("IA_INDISPONIVEL", "A leitura de documentos por IA não está disponível agora.", 503)
+    disparar_leitura(imp, senha)
 
 
 # ---------- revisar, confirmar, descartar ----------
@@ -299,6 +333,11 @@ def confirmar(imp: Importacao, linhas_editadas: list[LinhaRascunho] | None = Non
             descricao=linha.descricao or (resultado.get("estabelecimento") or "")[:200], data=linha.data,
             forma_pagamento=linha.forma_pagamento, importacao_id=imp.id,
         )
+        # O original vira anexo do lançamento, apontando para o mesmo arquivo (sem cópia).
+        lanc.anexos.append(Anexo(
+            nome=imp.nome, tipo_mime=imp.tipo_mime, tamanho=imp.tamanho,
+            armazenamento="importacao", importacao_id=imp.id,
+        ))
         db.session.add(lanc)
         criados.append(lanc)
     db.session.flush()
