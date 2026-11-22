@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
-TIPOS_DOCUMENTO = ("cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "comprovante", "outro")
+TIPOS_DOCUMENTO = ("cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "conta_consumo", "comprovante", "outro")
 FORMAS = ("dinheiro", "debito", "credito", "pix", "boleto", "outro")
 
 
@@ -34,11 +34,31 @@ class LinhaLida(BaseModel):
     confianca: Literal["alta", "media", "baixa"]
 
 
+class ContaLida(BaseModel):
+    """Conta de consumo (água, luz, gás, internet, telefone) ou boleto: vira a conta do mês na revisão."""
+
+    tipo_servico: Literal["agua", "luz", "gas", "internet", "telefone", "outro"]
+    emissor_nome: str | None = Field(description="Companhia ou beneficiário, como aparece (ex.: Equatorial Energia).")
+    emissor_cnpj: str | None = Field(description="CNPJ do emissor, só dígitos, se aparecer.")
+    identificador_cliente: str | None = Field(description="Nº da instalação, unidade consumidora, matrícula ou código do cliente.")
+    referencia: str | None = Field(description="Mês de referência do consumo, AAAA-MM.")
+    vencimento: str | None = Field(description="Data de vencimento, AAAA-MM-DD.")
+    valor_centavos: int | None = Field(description="Total a pagar em centavos.")
+    linha_digitavel: str | None = Field(description="Linha digitável ou código de barras, SÓ os dígitos; null se ilegível.")
+    consumo: float | None = Field(description="Consumo do mês (ex.: 312 para 312 kWh), ou null.")
+    unidade: Literal["kWh", "m3"] | None
+    pago: bool = Field(description="true SÓ com carimbo de pago ou comprovante de pagamento visível.")
+    data_pagamento: str | None = Field(description="Data do pagamento, AAAA-MM-DD, se pago.")
+    evidencia_pago: Literal["carimbo", "comprovante", "texto", "nenhuma"]
+    debito_automatico: bool = Field(description="true se a conta diz que será debitada automaticamente.")
+
+
 class ResultadoLeitura(BaseModel):
-    tipo_documento: Literal["cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "comprovante", "outro"]
+    tipo_documento: Literal["cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "conta_consumo", "comprovante", "outro"]
     estabelecimento: str | None = Field(description="Loja, banco ou emissor, se aparecer.")
     linhas: list[LinhaLida]
     observacao: str | None = Field(description="Aviso curto ao usuário (ilegível, cortado, moeda estrangeira), ou null.")
+    conta: ContaLida | None = Field(description="Preencha SÓ para conta de consumo ou boleto; null nos demais documentos.")
 
 
 SISTEMA = """Você lê documentos financeiros brasileiros (cupom fiscal, NFC-e, nota fiscal, fatura de cartão,
@@ -55,7 +75,12 @@ Regras:
   crédito na fatura = `receita`. Ignore pagamento da fatura anterior, saldo, limite, totais e encargos
   apenas informativos; juros, IOF e anuidade cobrados entram como despesa.
 - Extrato: débito = `despesa`, crédito = `receita`. Ignore linhas de saldo e totais.
-- Boleto: UMA linha `despesa` com a data de vencimento (forma `boleto`).
+- Conta de consumo (água, luz, gás, internet, telefone) e boleto: UMA linha `despesa` com a data de vencimento
+  e o total a pagar (forma `boleto`), e preencha `conta`. `tipo_documento` = `conta_consumo` para água, luz, gás,
+  internet e telefone; `boleto` para os demais. A data de vencimento é a do documento, não a de hoje.
+  `pago` só é true com carimbo de "pago" ou comprovante de pagamento visível; débito automático sozinho NÃO é pago.
+  A linha digitável vai só com dígitos, exatamente como impressa; se algum dígito estiver ilegível, use null.
+  Em todos os outros documentos, `conta` = null.
 - Comprovante de Pix ou transferência: UMA linha (forma `pix` quando for Pix).
 - `categoria_id`: escolha só da lista dada; na dúvida, null.
 - `confianca`: `baixa` quando o valor ou a data estiver ilegível ou incerto.

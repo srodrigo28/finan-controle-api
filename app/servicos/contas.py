@@ -1,6 +1,8 @@
 """Contas agendadas: geração de ocorrências por competência e pagamento."""
 from __future__ import annotations
 
+import re
+import unicodedata
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -9,7 +11,7 @@ from sqlalchemy import select
 
 from app.erros import ErroApi
 from app.extensoes import db
-from app.modelos import ContaAgendada, Lancamento, OcorrenciaConta
+from app.modelos import Anexo, ContaAgendada, Importacao, Lancamento, OcorrenciaConta
 from app.servicos.tempo import dia_seguro, hoje, limites_mes
 from app.util import data_iso, dec
 
@@ -109,7 +111,14 @@ def pagar_ocorrencia(
         data=data or hoje(),
         forma_pagamento=forma_pagamento or "boleto",
         conta_id=conta.id,
+        importacao_id=ocorrencia.importacao_id,
     )
+    # Mês preenchido por uma importação: o original vira anexo do lançamento (sem cópia).
+    imp = db.session.get(Importacao, ocorrencia.importacao_id) if ocorrencia.importacao_id else None
+    if imp is not None:
+        lancamento.anexos.append(Anexo(
+            nome=imp.nome, tipo_mime=imp.tipo_mime, tamanho=imp.tamanho, armazenamento="importacao", importacao_id=imp.id,
+        ))
     db.session.add(lancamento)
     db.session.flush()
     ocorrencia.valor_real = dec(valor_real)
@@ -121,7 +130,8 @@ def pagar_ocorrencia(
 
 def realinhar_ocorrencias(conta: ContaAgendada) -> int:
     """Mudou o dia/recorrência: descarta os vencimentos futuros ainda pendentes para o gerador
-    recriá-los na data nova. Pagas ficam (são histórico) e puladas também (decisão do usuário)."""
+    recriá-los na data nova. Pagas ficam (são histórico), puladas também (decisão do usuário) e as
+    preenchidas por uma importação também (o vencimento veio do documento do mês)."""
     h = hoje()
     competencia_atual = f"{h.year:04d}-{h.month:02d}"
     alvo = db.session.scalars(
@@ -129,6 +139,7 @@ def realinhar_ocorrencias(conta: ContaAgendada) -> int:
             OcorrenciaConta.conta_id == conta.id,
             OcorrenciaConta.status == "pendente",
             OcorrenciaConta.competencia >= competencia_atual,
+            OcorrenciaConta.importacao_id.is_(None),
         )
     ).all()
     for oc in alvo:
@@ -167,6 +178,98 @@ def reabrir_ocorrencia(ocorrencia: OcorrenciaConta) -> None:
         if lanc is not None:
             db.session.delete(lanc)
     ocorrencia.lancamento_id = None
-    ocorrencia.valor_real = None
+    if ocorrencia.importacao_id is None:
+        ocorrencia.valor_real = None  # o valor lido do documento do mês continua valendo
     ocorrencia.status = "pendente"
     db.session.flush()
+
+
+# ---------- conta de consumo importada (6c) ----------
+
+# Palavras que aparecem no nome de qualquer companhia e não identificam nenhuma.
+_GENERICAS = {
+    "sa", "s", "a", "ltda", "cia", "companhia", "de", "do", "da", "dos", "das", "e", "energia", "eletrica",
+    "agua", "aguas", "saneamento", "esgoto", "gas", "telecom", "telefonia", "internet", "servicos", "distribuidora",
+    "distribuicao", "brasil", "estado", "municipal", "estadual", "conta", "luz",
+}
+
+
+def _tokens(nome: str | None) -> set[str]:
+    sem_acento = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode().lower()
+    return {t for t in re.split(r"[^a-z0-9]+", sem_acento) if len(t) >= 3 and t not in _GENERICAS}
+
+
+def casar_conta(
+    usuario_id: uuid.UUID, emissor_chave: str | None, identificador: str | None, nome: str | None
+) -> tuple[ContaAgendada | None, str | None]:
+    """A conta agendada desta companhia, em ordem de força: chave + instalação → só chave → só instalação →
+    nome. Nome é só sugestão: o usuário revisa."""
+    contas = db.session.scalars(
+        select(ContaAgendada).where(
+            ContaAgendada.usuario_id == usuario_id, ContaAgendada.ativa.is_(True), ContaAgendada.recorrencia != "semanal"
+        )
+    ).all()
+    if emissor_chave:
+        mesma = [c for c in contas if c.emissor_chave == emissor_chave]
+        if identificador:
+            exata = [c for c in mesma if c.identificador_cliente == identificador]
+            if len(exata) == 1:
+                return exata[0], "chave_identificador"
+        if len(mesma) == 1 and not (identificador and mesma[0].identificador_cliente not in (None, identificador)):
+            return mesma[0], "chave"
+    if identificador:
+        # Código ilegível no papel, mas o nº da instalação veio: ele sozinho identifica a conta.
+        por_id = [c for c in contas if c.identificador_cliente == identificador
+                  and (emissor_chave is None or c.emissor_chave in (None, emissor_chave))]
+        if len(por_id) == 1:
+            return por_id[0], "identificador"
+    alvo = _tokens(nome)
+    if alvo:
+        por_nome = [c for c in contas if (emissor_chave is None or c.emissor_chave in (None, emissor_chave))
+                    and _tokens(c.nome) & alvo]
+        if len(por_nome) == 1:
+            return por_nome[0], "nome"
+    return None, None
+
+
+def preencher_ocorrencia(
+    usuario_id: uuid.UUID,
+    conta: ContaAgendada,
+    vencimento: date,
+    valor: Decimal,
+    importacao_id: uuid.UUID,
+    linha_digitavel: str | None = None,
+    consumo: Decimal | None = None,
+    unidade: str | None = None,
+    referencia: str | None = None,
+) -> OcorrenciaConta:
+    """O documento do mês preenche a ocorrência da competência do vencimento (cria se faltar, sem duplicar)."""
+    ano, mes = vencimento.year, vencimento.month
+    competencia = f"{ano:04d}-{mes:02d}"
+    gerar_ocorrencias(usuario_id, ano, mes)  # antes: o gerador nunca cria outra depois desta
+    candidatas = db.session.scalars(
+        select(OcorrenciaConta)
+        .where(OcorrenciaConta.conta_id == conta.id, OcorrenciaConta.competencia == competencia)
+        .with_for_update(of=OcorrenciaConta)  # a conta vem por join automático; travar só a ocorrência
+    ).all()
+    oc = min(candidatas, key=lambda o: abs((o.vencimento - vencimento).days), default=None)
+    if oc is None:
+        oc = OcorrenciaConta(conta_id=conta.id, competencia=competencia, vencimento=vencimento)
+        db.session.add(oc)
+    elif oc.status == "paga":
+        raise ErroApi(
+            "OCORRENCIA_PAGA", f"{conta.nome} de {competencia} já está paga.", 409,
+            {"ocorrencia_id": str(oc.id), "lancamento_id": str(oc.lancamento_id) if oc.lancamento_id else None},
+        )
+    oc.vencimento = vencimento
+    oc.valor_real = dec(valor)
+    oc.importacao_id = importacao_id
+    oc.linha_digitavel = linha_digitavel
+    oc.consumo = consumo
+    oc.unidade_consumo = unidade
+    oc.referencia = referencia
+    if oc.status == "pulada":
+        oc.status = "pendente"  # chegou a conta: o mês volta a cobrar
+    db.session.flush()
+    return oc
+

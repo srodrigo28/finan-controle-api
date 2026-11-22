@@ -30,7 +30,7 @@ def leitor(monkeypatch):
         if estado["erro"]:
             raise ErroLeitura(estado["erro"])
         return Leitura(
-            resultado=ResultadoLeitura(tipo_documento="cupom", estabelecimento="Mercado Bom Preço", linhas=estado["linhas"], observacao=None),
+            resultado=ResultadoLeitura(tipo_documento="cupom", estabelecimento="Mercado Bom Preço", linhas=estado["linhas"], observacao=None, conta=None),
             modelo="claude-sonnet-5-5", tokens_entrada=3000, tokens_saida=200,
         )
 
@@ -55,6 +55,7 @@ def test_cupom_vira_rascunho_e_original_fica_guardado(api, leitor, app):
     assert imp["linhas"] == [{
         "data": "2026-11-18", "valor": 73.62, "tipo": "despesa", "descricao": "Mercado Bom Preço",
         "categoria_id": mercado["id"], "forma_pagamento": "debito", "confianca": "alta", "incluir": True,
+        "destino": "lancamento", "conta": None,
     }]
     assert imp["duplicada_de"] is None
     # a IA recebeu as categorias do usuário

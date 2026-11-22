@@ -8,6 +8,7 @@ from app.erros import nao_encontrado
 from app.esquemas.importacao import AtualizarRascunho
 from app.servicos import importacoes as servico
 from app.servicos.plano import exige_plano_ativo
+from app.servicos.tempo import hoje
 from app.util import iso, parse_uuid, usuario_id, validar
 
 bp = Blueprint("importacoes", __name__, url_prefix="")
@@ -74,8 +75,13 @@ def confirmar(iid: str):
     imp = _buscar(iid, travar=True)
     corpo = request.get_json(silent=True) or {}
     linhas = validar(AtualizarRascunho, corpo).linhas if "linhas" in corpo else None
-    criados = servico.confirmar(imp, linhas)
-    return jsonify({"importacao": imp.para_dict(), "lancamentos": [l.para_dict() for l in criados]})
+    criados, ocorrencias = servico.confirmar(imp, linhas)
+    h = hoje()
+    return jsonify({
+        "importacao": imp.para_dict(),
+        "lancamentos": [l.para_dict() for l in criados],
+        "ocorrencias": [o.para_dict(h) for o in ocorrencias],
+    })
 
 
 @bp.post("/importacoes/<iid>/reler")

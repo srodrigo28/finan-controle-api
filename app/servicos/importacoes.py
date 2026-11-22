@@ -18,10 +18,11 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from app.erros import ErroApi, nao_encontrado
-from app.esquemas.importacao import LinhaRascunho
+from app.esquemas.importacao import ContaRascunho, LinhaRascunho
 from app.extensoes import db
-from app.modelos import Anexo, Categoria, Importacao, Lancamento
-from app.servicos import leitor_ia, pdf
+from app.modelos import Anexo, Categoria, ContaAgendada, Importacao, Lancamento, OcorrenciaConta
+from app.servicos import codigo_barras, leitor_ia, pdf
+from app.servicos.contas import buscar_conta, casar_conta, pagar_ocorrencia, preencher_ocorrencia
 from app.servicos.categorias import categoria_do_usuario
 from app.servicos.tempo import fuso, hoje
 from app.util import agora, dec, iso, num
@@ -210,6 +211,70 @@ def _linha_do_rascunho(lida, categorias_validas: set[str], ref: date) -> dict:
         "forma_pagamento": lida.forma_pagamento,
         "confianca": "baixa" if (data is None or valor is None) else lida.confianca,
         "incluir": valor is not None,
+        "destino": "lancamento",
+        "conta": None,
+    }
+
+
+def _data_ou_none(texto: str | None) -> date | None:
+    try:
+        return date.fromisoformat(texto) if texto else None
+    except ValueError:
+        return None
+
+
+def _chave_emissor(codigo: codigo_barras.CodigoLido | None, cnpj: str | None) -> str | None:
+    if codigo is not None and codigo.valido and codigo.tipo == "arrecadacao":
+        # 2º dígito = segmento (água, luz…); 16º–19º = empresa/órgão na FEBRABAN.
+        return f"arrec:{codigo.codigo_barras[1]}:{codigo.codigo_barras[15:19]}"
+    digitos = "".join(ch for ch in (cnpj or "") if ch.isdigit())
+    return f"cnpj:{digitos}" if len(digitos) == 14 else None
+
+
+def _aplicar_conta(uid: uuid.UUID, linha: dict, lida, estabelecimento: str | None, ref: date) -> None:
+    """Conta de consumo/boleto: confere o código, casa com a conta agendada e escolhe o destino.
+
+    Nenhum log aqui leva a linha digitável nem o nº da instalação (dados pessoais; meta Q11)."""
+    codigo = codigo_barras.analisar(lida.linha_digitavel, ref) if lida.linha_digitavel else None
+    valido = bool(codigo and codigo.valido)
+    vencimento = _data_ou_none(lida.vencimento) or _data_ou_none(linha["data"])
+    if linha["valor"] is None and valido and codigo.valor is not None:
+        linha["valor"] = num(codigo.valor)
+        linha["incluir"] = True
+    duvida = (
+        (lida.linha_digitavel and not valido)
+        or (valido and codigo.valor is not None and linha["valor"] is not None and dec(linha["valor"]) != codigo.valor)
+        or (valido and codigo.vencimento is not None and vencimento is not None and codigo.vencimento != vencimento)
+    )
+    if duvida:
+        linha["confianca"] = "baixa"  # o código não confere com o papel: o usuário confere (meta Q1)
+    pago = lida.pago and lida.evidencia_pago in ("carimbo", "comprovante")
+    data_pagamento = _data_ou_none(lida.data_pagamento) if pago else None
+    nome = (lida.emissor_nome or estabelecimento or "Conta").strip()[:120]
+    chave = _chave_emissor(codigo, lida.emissor_cnpj)
+    identificador = (lida.identificador_cliente or "").strip()[:40] or None
+    conta, casamento = casar_conta(uid, chave, identificador, nome)
+
+    if vencimento is not None:
+        linha["data"] = (data_pagamento or vencimento).isoformat()
+    linha["destino"] = "conta" if (conta is not None or not pago) else "lancamento"
+    linha["conta"] = {
+        "conta_id": str(conta.id) if conta else None,
+        "casamento": casamento,
+        "conta_nova": None if conta else {"nome": nome, "dia_vencimento": vencimento.day if vencimento else 10},
+        "vencimento": vencimento.isoformat() if vencimento else None,
+        "pago": pago,
+        "data_pagamento": data_pagamento.isoformat() if data_pagamento else None,
+        "debito_automatico": lida.debito_automatico,
+        "referencia": lida.referencia if lida.referencia and len(lida.referencia) == 7 else None,
+        "consumo": lida.consumo,
+        "unidade": lida.unidade,
+        "linha_digitavel": codigo.linha_digitavel if valido else lida.linha_digitavel,
+        "codigo_valido": valido,
+        "emissor_nome": nome,
+        "emissor_chave": chave,
+        "identificador_cliente": identificador,
+        "tipo_servico": lida.tipo_servico,
     }
 
 
@@ -238,6 +303,8 @@ def _ler(app, iid: uuid.UUID, conteudo: bytes) -> None:
                         "linhas": [_linha_do_rascunho(lida, validas, ref) for lida in r.linhas],
                     },
                 }
+                if r.conta is not None and novos["resultado"]["linhas"]:
+                    _aplicar_conta(usuario, novos["resultado"]["linhas"][0], r.conta, r.estabelecimento, ref)
             except leitor_ia.ErroLeitura as e:
                 novos = {"estado": "erro", "erro": str(e)[:300]}
             except Exception:  # noqa: BLE001 — qualquer falha vira estado legível, nunca leitura presa
@@ -279,6 +346,14 @@ def informar_senha(imp: Importacao, senha: str) -> None:
 
 # ---------- revisar, confirmar, descartar ----------
 
+def _conta_para_json(c: ContaRascunho | None) -> dict | None:
+    if c is None:
+        return None
+    d = c.model_dump(mode="json")
+    d["consumo"] = float(c.consumo) if c.consumo is not None else None
+    return d
+
+
 def _linha_para_json(linha: LinhaRascunho) -> dict:
     return {
         "data": linha.data.isoformat() if linha.data else None,
@@ -289,6 +364,8 @@ def _linha_para_json(linha: LinhaRascunho) -> dict:
         "forma_pagamento": linha.forma_pagamento,
         "confianca": linha.confianca,
         "incluir": linha.incluir,
+        "destino": linha.destino,
+        "conta": _conta_para_json(linha.conta),
     }
 
 
@@ -303,13 +380,55 @@ def atualizar_rascunho(imp: Importacao, linhas: list[LinhaRascunho], commit: boo
         db.session.commit()
 
 
-def confirmar(imp: Importacao, linhas_editadas: list[LinhaRascunho] | None = None) -> list[Lancamento]:
-    """Cria os lançamentos marcados numa transação. Confirmar de novo devolve os mesmos (idempotente).
+def _salvar_na_conta(imp: Importacao, linha: LinhaRascunho) -> tuple[OcorrenciaConta, Lancamento | None, ContaAgendada | None]:
+    """Linha com destino `conta`: preenche o mês da conta (e dá baixa se já paga). Devolve a conta se foi criada."""
+    c = linha.conta
+    uid = imp.usuario_id
+    valor = dec(linha.valor)
+    vencimento = c.vencimento or linha.data
+    criada = None
+    if c.conta_id:
+        conta = buscar_conta(uid, c.conta_id)
+        # O mês seguinte já casa pela chave.
+        conta.emissor_chave = conta.emissor_chave or c.emissor_chave
+        conta.identificador_cliente = conta.identificador_cliente or c.identificador_cliente
+        conta.tipo_servico = conta.tipo_servico or c.tipo_servico
+    else:
+        if c.conta_nova is None:
+            raise ErroApi("VALIDACAO", "Escolha a conta ou crie uma conta nova.", 422)
+        conta = criada = ContaAgendada(
+            usuario_id=uid, nome=c.conta_nova.nome, valor_estimado=valor, dia_vencimento=c.conta_nova.dia_vencimento,
+            recorrencia="mensal", categoria_id=linha.categoria_id, emissor_chave=c.emissor_chave,
+            identificador_cliente=c.identificador_cliente, tipo_servico=c.tipo_servico,
+        )
+        db.session.add(conta)
+        db.session.flush()
+    # O DV é conferido de novo aqui: código que não confere nunca fica para "copiar".
+    codigo = codigo_barras.analisar(c.linha_digitavel, hoje()) if c.linha_digitavel else None
+    oc = preencher_ocorrencia(
+        uid, conta, vencimento, valor, imp.id,
+        linha_digitavel=codigo.linha_digitavel if codigo and codigo.valido else None,
+        consumo=c.consumo, unidade=c.unidade, referencia=c.referencia,
+    )
+    lanc = None
+    if c.pago:
+        lanc = pagar_ocorrencia(uid, oc, valor, c.data_pagamento or linha.data, linha.forma_pagamento)
+        lanc.categoria_id = lanc.categoria_id or linha.categoria_id
+    return oc, lanc, criada
 
-    `linhas_editadas` (opcional) é o rascunho como está na tela: aplicado antes, na mesma trava."""
+
+def confirmar(imp: Importacao, linhas_editadas: list[LinhaRascunho] | None = None) -> tuple[list[Lancamento], list[OcorrenciaConta]]:
+    """Salva as linhas marcadas numa transação: lançamento, ou o mês da conta agendada (6c).
+
+    Confirmar de novo devolve os mesmos registros (idempotente). `linhas_editadas` (opcional) é o rascunho
+    como está na tela: aplicado antes, na mesma trava. Qualquer erro desfaz tudo (nada fica pela metade)."""
     if imp.estado == "concluida":
-        ids = [uuid.UUID(i) for i in (imp.resultado or {}).get("lancamentos_criados", [])]
-        return list(db.session.scalars(select(Lancamento).where(Lancamento.id.in_(ids)))) if ids else []
+        r = imp.resultado or {}
+        ids = [uuid.UUID(i) for i in r.get("lancamentos_criados", [])]
+        ocs = [uuid.UUID(i) for i in r.get("ocorrencias_afetadas", [])]
+        lancs = list(db.session.scalars(select(Lancamento).where(Lancamento.id.in_(ids)))) if ids else []
+        ocorrencias = list(db.session.scalars(select(OcorrenciaConta).where(OcorrenciaConta.id.in_(ocs)))) if ocs else []
+        return lancs, ocorrencias
     if imp.estado != "revisar":
         raise ErroApi("ESTADO_INVALIDO", "Só dá para confirmar uma importação em revisão.", 409, {"estado": imp.estado})
     if linhas_editadas is not None:
@@ -324,10 +443,20 @@ def confirmar(imp: Importacao, linhas_editadas: list[LinhaRascunho] | None = Non
     if faltando:
         raise ErroApi("VALIDACAO", "Preencha data e valor das linhas marcadas.", 422, {"linhas": faltando})
 
-    criados = []
+    criados: list[Lancamento] = []
+    ocorrencias: list[OcorrenciaConta] = []
+    contas_criadas: list[ContaAgendada] = []
     for linha in marcadas:
         if linha.categoria_id:
             categoria_do_usuario(imp.usuario_id, linha.categoria_id)
+        if linha.destino == "conta" and linha.conta is not None:
+            oc, lanc, criada = _salvar_na_conta(imp, linha)
+            ocorrencias.append(oc)
+            if lanc is not None:
+                criados.append(lanc)
+            if criada is not None:
+                contas_criadas.append(criada)
+            continue
         lanc = Lancamento(
             usuario_id=imp.usuario_id, tipo=linha.tipo, valor=dec(linha.valor), categoria_id=linha.categoria_id,
             descricao=linha.descricao or (resultado.get("estabelecimento") or "")[:200], data=linha.data,
@@ -341,11 +470,16 @@ def confirmar(imp: Importacao, linhas_editadas: list[LinhaRascunho] | None = Non
         db.session.add(lanc)
         criados.append(lanc)
     db.session.flush()
-    imp.resultado = {**resultado, "lancamentos_criados": [str(l.id) for l in criados]}
+    imp.resultado = {
+        **resultado,
+        "lancamentos_criados": [str(l.id) for l in criados],
+        "ocorrencias_afetadas": [str(o.id) for o in ocorrencias],
+        "contas_criadas": [str(c.id) for c in contas_criadas],
+    }
     imp.estado = "concluida"
     imp.concluida_em = agora()
     db.session.commit()
-    return criados
+    return criados, ocorrencias
 
 
 def descartar(imp: Importacao) -> None:

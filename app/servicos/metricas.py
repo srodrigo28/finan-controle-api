@@ -143,8 +143,11 @@ def mensal(usuario: Usuario, ano: int, mes: int) -> dict:
 
     ocorrencias = gerar_ocorrencias(usuario.id, ano, mes)
     pagas = [o for o in ocorrencias if o.status == "paga"]
-    pendentes = [o for o in ocorrencias if o.status != "paga"]
-    total_pendente = sum((o.conta.valor_estimado or ZERO for o in pendentes), ZERO)
+    # Mesma regra de GET /contas/ocorrencias (E004): o valor do mês manda e a pulada não cobra.
+    pendentes = [o for o in ocorrencias if o.status not in ("paga", "pulada")]
+    total_pendente = sum(
+        (o.valor_real if o.valor_real is not None else (o.conta.valor_estimado or ZERO) for o in pendentes), ZERO
+    )
 
     h = hoje()
     if (ano, mes) == (h.year, h.month):

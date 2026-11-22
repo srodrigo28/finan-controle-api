@@ -83,3 +83,20 @@ def test_metricas_diario_semanal_mensal(api):
 def test_mes_invalido(api):
     r = api.get("/metricas/mensal?mes=2026-13")
     assert r.status_code == 422
+
+
+def test_total_pendente_do_mes_usa_valor_real_e_ignora_pulada(api):
+    """E004: o total pendente do Início/Mês tem de bater com o de /contas/ocorrencias da mesma competência.
+
+    Competência fixa (E002): o cálculo não depende do dia em que o teste roda."""
+    for nome, valor in (("Condomínio", 500), ("Energia", 180), ("Academia", 90)):
+        assert api.post("/contas", {"nome": nome, "valor_estimado": valor, "dia_vencimento": 10}).status_code == 201
+    ocs = {o["conta"]["nome"]: o for o in api.get("/contas/ocorrencias?competencia=2026-12").get_json()["dados"]}
+    api.patch(f"/contas/ocorrencias/{ocs['Energia']['id']}", {"valor_real": 213.47})  # a conta do mês veio maior
+    api.patch(f"/contas/ocorrencias/{ocs['Academia']['id']}", {"status": "pulada"})  # este mês não tem
+
+    rota = api.get("/contas/ocorrencias?competencia=2026-12").get_json()["total_pendente"]
+    m = api.get("/metricas/mensal?mes=2026-12").get_json()["contas"]
+    assert rota == 713.47
+    assert m["total_pendente"] == rota
+    assert m["pendentes"] == 2  # a pulada não é pendente

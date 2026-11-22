@@ -62,6 +62,7 @@ class Importacao(ModeloBase):
             "observacao": r.get("observacao"),
             "linhas": r.get("linhas", []),
             "lancamentos_criados": r.get("lancamentos_criados", []),
+            "ocorrencias_afetadas": r.get("ocorrencias_afetadas", []),
             "erro": self.erro,
             "modelo_ia": self.modelo_ia,
             "tentativas": self.tentativas,

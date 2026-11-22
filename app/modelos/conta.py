@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,7 @@ STATUS_OCORRENCIA = ("pendente", "paga", "atrasada", "pulada")
 
 class ContaAgendada(ModeloBase):
     __tablename__ = "conta_agendada"
+    __table_args__ = (Index("ix_conta_agendada_usuario_emissor", "usuario_id", "emissor_chave"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     usuario_id: Mapped[uuid.UUID] = mapped_column(
@@ -32,6 +33,11 @@ class ContaAgendada(ModeloBase):
     # Para recorrência anual/unica: mês (1-12) e ano de referência do vencimento.
     mes_referencia: Mapped[int | None] = mapped_column(Integer)
     ano_referencia: Mapped[int | None] = mapped_column(Integer)
+    # Conta de consumo importada (6c): casa o documento do mês seguinte com esta conta.
+    # "arrec:<segmento>:<empresa>" (do código de arrecadação) ou "cnpj:<14 dígitos>".
+    emissor_chave: Mapped[str | None] = mapped_column(String(40))
+    identificador_cliente: Mapped[str | None] = mapped_column(String(40))  # nº da instalação / UC / cliente
+    tipo_servico: Mapped[str | None] = mapped_column(String(10))  # agua, luz, gas, internet, telefone, outro
 
     ocorrencias: Mapped[list["OcorrenciaConta"]] = relationship(
         back_populates="conta", cascade="all, delete-orphan"
@@ -49,6 +55,9 @@ class ContaAgendada(ModeloBase):
             "lembrete_dias": self.lembrete_dias,
             "mes_referencia": self.mes_referencia,
             "ano_referencia": self.ano_referencia,
+            "emissor_chave": self.emissor_chave,
+            "identificador_cliente": self.identificador_cliente,
+            "tipo_servico": self.tipo_servico,
             "criado_em": iso(self.criado_em),
         }
 
@@ -70,6 +79,14 @@ class OcorrenciaConta(ModeloBase):
     lancamento_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("lancamento.id", ondelete="SET NULL")
     )
+    # Mês preenchido por uma importação (6c): o original vira anexo do lançamento na baixa.
+    importacao_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("importacao.id", ondelete="SET NULL"), index=True
+    )
+    linha_digitavel: Mapped[str | None] = mapped_column(String(48))  # só dígitos e só com o DV conferido
+    consumo: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))
+    unidade_consumo: Mapped[str | None] = mapped_column(String(5))  # kWh, m3
+    referencia: Mapped[str | None] = mapped_column(String(7))  # AAAA-MM do consumo (a competência segue o vencimento)
 
     conta: Mapped[ContaAgendada] = relationship(back_populates="ocorrencias", lazy="joined")
 
@@ -89,6 +106,11 @@ class OcorrenciaConta(ModeloBase):
             "valor_real": num(self.valor_real),
             "status": self.status_efetivo(hoje),
             "lancamento_id": uid(self.lancamento_id),
+            "importacao_id": uid(self.importacao_id),
+            "linha_digitavel": self.linha_digitavel,
+            "consumo": num(self.consumo),
+            "unidade_consumo": self.unidade_consumo,
+            "referencia": self.referencia,
             "conta": {
                 "nome": self.conta.nome,
                 "categoria_id": uid(self.conta.categoria_id),
