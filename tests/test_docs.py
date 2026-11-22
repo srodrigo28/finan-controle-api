@@ -18,6 +18,8 @@ def test_openapi_json(cliente):
     assert spec["openapi"].startswith("3.1")
     assert "/healthz" in spec["paths"]
     assert "/api/v1/sessoes/sincronizar" in spec["paths"]
+    assert "/api/v1/importacoes" in spec["paths"]
+    assert "/api/v1/importacoes/{id}/confirmar" in spec["paths"]
     assert "Sincronizar" in spec["components"]["schemas"]
     assert spec["servers"] == [{"url": "/"}]
 

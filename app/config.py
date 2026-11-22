@@ -77,6 +77,13 @@ class Config:
     PASSWORD_RESET_TOKEN_EXPIRES_HOURS = int(os.getenv("PASSWORD_RESET_TOKEN_EXPIRES_HOURS", "2"))
     PASSWORD_RESET_RESEND_SECONDS = int(os.getenv("PASSWORD_RESET_RESEND_SECONDS", "60"))
 
+    # Importação por IA (imagem/PDF → rascunho de lançamentos). Sem chave = rotas respondem 503
+    # IA_INDISPONIVEL e o resto do app segue igual. O modelo vem do .env para trocar sem deploy.
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5").strip() or "claude-sonnet-5-5"
+    ANTHROPIC_TIMEOUT = int(os.getenv("ANTHROPIC_TIMEOUT", "120"))
+    IMPORTACAO_LIMITE_MES = int(os.getenv("IMPORTACAO_LIMITE_MES", "50"))
+
 
 class ConfigTeste(Config):
     TESTING = True
@@ -94,3 +101,6 @@ class ConfigTeste(Config):
     # Ligado, o código mestre faria o teste do caminho errado passar. Quem testa
     # o atalho liga por `monkeypatch` dentro do próprio teste.
     EMAIL_VERIFICATION_TEST_CODE = ""
+    # Testes nunca chamam a Anthropic: o leitor é trocado por um falso (tests/test_importacoes.py).
+    ANTHROPIC_API_KEY = "chave-de-teste"
+    IMPORTACAO_LIMITE_MES = 50

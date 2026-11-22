@@ -1,7 +1,7 @@
 """Especificação OpenAPI 3.1 da API, montada a partir dos esquemas pydantic e do contrato (docs/API.md)."""
 from typing import Any
 
-from app.esquemas import auth, categoria, conta, lancamento, sessao
+from app.esquemas import auth, categoria, conta, importacao, lancamento, sessao
 
 REF = "#/components/schemas/{model}"
 
@@ -13,6 +13,7 @@ ENTRADAS = [
     sessao.CriarSessao, sessao.AtualizarSessao, sessao.CriarItem, sessao.AtualizarItem,
     sessao.FecharSessao, sessao.Sincronizar,
     conta.CriarConta, conta.AtualizarConta, conta.PagarOcorrencia,
+    importacao.LinhaRascunho, importacao.AtualizarRascunho,
 ]
 
 # Esquemas de SAÍDA (descritos à mão, espelhando docs/API.md)
@@ -56,9 +57,21 @@ SAIDAS: dict[str, dict[str, Any]] = {
         "categoria_id": {**UUID, "nullable": True}, "descricao": {"type": "string"}, "data": DATA,
         "forma_pagamento": {"type": "string", "nullable": True, "enum": ["dinheiro", "debito", "credito", "pix", "boleto", "outro"]},
         "sessao_id": {**UUID, "nullable": True}, "conta_id": {**UUID, "nullable": True},
+        "importacao_id": {**UUID, "nullable": True, "description": "documento de onde veio (importação por IA)"},
         "anexos": {"type": "array", "items": {"$ref": REF.format(model="Anexo")}},
         "itens": {"type": "array", "items": {"$ref": REF.format(model="Item")}},
         "criado_em": TS, "atualizado_em": TS}},
+    "Importacao": {"type": "object", "properties": {
+        "id": UUID, "estado": {"type": "string", "enum": ["recebida", "lendo", "revisar", "concluida", "erro", "descartada"]},
+        "tipo_documento": {"type": "string", "nullable": True, "enum": ["cupom", "nota_fiscal", "fatura_cartao", "extrato", "boleto", "comprovante", "outro", None]},
+        "nome": {"type": "string"}, "tipo_mime": {"type": "string"}, "tamanho": {"type": "integer"},
+        "url": {"type": "string", "description": "original, só via API com JWT"},
+        "estabelecimento": {"type": "string", "nullable": True}, "observacao": {"type": "string", "nullable": True},
+        "linhas": {"type": "array", "items": {"$ref": REF.format(model="LinhaRascunho")}},
+        "lancamentos_criados": {"type": "array", "items": UUID}, "erro": {"type": "string", "nullable": True},
+        "modelo_ia": {"type": "string", "nullable": True, "example": "claude-sonnet-5-5"}, "tentativas": {"type": "integer"},
+        "criado_em": TS, "concluida_em": {**TS, "nullable": True},
+        "duplicada_de": {"type": "object", "nullable": True, "description": "só no POST com ?forcar=1"}}},
     "Sessao": {"type": "object", "properties": {
         "id": UUID, "local": {"type": "string", "nullable": True}, "orcamento": {**VALOR, "nullable": True},
         "status": {"type": "string", "enum": ["aberta", "fechada", "abandonada"]}, "aberta_em": TS,
@@ -206,6 +219,22 @@ def montar_spec(servidor: str) -> dict[str, Any]:
         f"{v1}/anexos/{{id}}": {"delete": _op("Lançamentos", "Remover anexo", _resp(None, "Removido", "204"), params=[P_ID])},
         f"{v1}/anexos/{{id}}/arquivo": {"get": _op("Lançamentos", "Baixar anexo (autenticado)", {"200": {"description": "Binário", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}, params=[P_ID])},
 
+        f"{v1}/importacoes": {
+            "get": _op("Importação por IA", "Últimas 30 importações", _resp(_lista("Importacao"))),
+            "post": _op("Importação por IA", "Enviar foto/PDF (≤ 8 MB): guarda o original e lê com a IA em segundo plano (402, 409 IMPORTACAO_DUPLICADA, 429 LIMITE_IMPORTACAO, 503 IA_INDISPONIVEL)",
+                _resp(_ref("Importacao"), "Aceito — acompanhe pelo GET", "202"),
+                {"required": True, "content": {"multipart/form-data": {"schema": {"type": "object", "properties": {"arquivo": {"type": "string", "format": "binary"}}}}}},
+                [_param("forcar", descricao="1 = ler de novo um arquivo já enviado")]),
+        },
+        f"{v1}/importacoes/{{id}}": {
+            "get": _op("Importação por IA", "Detalhe (consulte a cada 2 s enquanto lendo)", _resp(_ref("Importacao")), params=[P_ID]),
+            "patch": _op("Importação por IA", "Salvar o rascunho editado", _resp(_ref("Importacao")), _corpo(importacao.AtualizarRascunho), [P_ID]),
+        },
+        f"{v1}/importacoes/{{id}}/arquivo": {"get": _op("Importação por IA", "Baixar o original (autenticado, sem cache)", {"200": {"description": "Binário", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}, params=[P_ID])},
+        f"{v1}/importacoes/{{id}}/confirmar": {"post": _op("Importação por IA", "Criar os lançamentos marcados (idempotente; aceita {linhas} opcional)", _resp({"type": "object", "properties": {"importacao": _ref("Importacao"), "lancamentos": {"type": "array", "items": _ref("Lancamento")}}}), _corpo(importacao.AtualizarRascunho), [P_ID])},
+        f"{v1}/importacoes/{{id}}/reler": {"post": _op("Importação por IA", "Ler de novo um documento que falhou (até 3 leituras)", _resp(_ref("Importacao"), "Aceito", "202"), params=[P_ID])},
+        f"{v1}/importacoes/{{id}}/descartar": {"post": _op("Importação por IA", "Descartar o rascunho (o original fica guardado)", _resp(_ref("Importacao")), params=[P_ID])},
+
         f"{v1}/sessoes": {
             "get": _op("Modo Mercado", "Listar sessões (sem itens)", _resp(_lista("Sessao")), params=[_param("status", enum=["aberta", "fechada", "abandonada"])]),
             "post": _op("Modo Mercado", "Abrir sessão de compra", _resp(_ref("Sessao"), "Criada", "201"), _corpo(sessao.CriarSessao)),
@@ -271,7 +300,7 @@ def montar_spec(servidor: str) -> dict[str, Any]:
             ),
         },
         "servers": [{"url": servidor}],
-        "tags": [{"name": t} for t in ("Infra", "Auth", "Categorias", "Lançamentos", "Modo Mercado", "Preços", "Contas", "Métricas", "Notificações", "Exportação")],
+        "tags": [{"name": t} for t in ("Infra", "Auth", "Categorias", "Lançamentos", "Modo Mercado", "Preços", "Contas", "Métricas", "Notificações", "Exportação", "Importação por IA")],
         "components": {
             "schemas": componentes,
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}},

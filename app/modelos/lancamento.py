@@ -35,6 +35,10 @@ class Lancamento(ModeloBase):
     conta_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conta_agendada.id", ondelete="SET NULL", use_alter=True, name="fk_lancamento_conta_id")
     )
+    # Documento de onde o lançamento veio (importação por IA); o original fica na importação.
+    importacao_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("importacao.id", ondelete="SET NULL"), index=True
+    )
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -54,6 +58,7 @@ class Lancamento(ModeloBase):
             "forma_pagamento": self.forma_pagamento,
             "sessao_id": uid(self.sessao_id),
             "conta_id": uid(self.conta_id),
+            "importacao_id": uid(self.importacao_id),
             "anexos": [a.para_dict() for a in self.anexos],
             "criado_em": iso(self.criado_em),
             "atualizado_em": iso(self.atualizado_em),
