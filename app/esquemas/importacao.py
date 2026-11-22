@@ -36,6 +36,15 @@ class ContaRascunho(Esquema):
     tipo_servico: Literal["agua", "luz", "gas", "internet", "telefone", "outro"] | None = None
 
 
+class Parecido(Esquema):
+    """Lançamento que já existe e parece ser este (6d). `forte` = mesmo dia: a linha vem desmarcada."""
+
+    lancamento_id: uuid.UUID
+    data: date
+    descricao: str = ""
+    forte: bool = False
+
+
 class LinhaRascunho(Esquema):
     """Uma linha do rascunho como o usuário deixou na revisão."""
 
@@ -50,6 +59,7 @@ class LinhaRascunho(Esquema):
     # Rascunho antigo (antes da 6c) não tem destino: vira lançamento, como sempre foi.
     destino: Literal["lancamento", "conta"] = "lancamento"
     conta: ContaRascunho | None = None
+    parece_lancado: Parecido | None = None
 
 
 class AtualizarRascunho(Esquema):

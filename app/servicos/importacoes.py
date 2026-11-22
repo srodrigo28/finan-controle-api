@@ -213,7 +213,53 @@ def _linha_do_rascunho(lida, categorias_validas: set[str], ref: date) -> dict:
         "incluir": valor is not None,
         "destino": "lancamento",
         "conta": None,
+        "parece_lancado": None,
     }
+
+
+JANELA_PARECIDO = 3  # dias para cada lado (meta Q6)
+
+
+def _marcar_parecidos(uid: uuid.UUID, iid: uuid.UUID, linhas: list[dict]) -> None:
+    """Avisa quando o gasto já foi lançado (à mão ou no Modo Mercado). Cada lançamento casa com UMA linha.
+
+    Mesmo dia = desmarca; até 3 dias = só avisa. Compara só com lançamentos de fora desta importação."""
+    datas = {i: _data_ou_none(l["data"]) for i, l in enumerate(linhas)}
+    alvos = [i for i, l in enumerate(linhas) if datas[i] and l["valor"] is not None and l.get("destino") != "conta"]
+    if not alvos:
+        return
+    folga = timedelta(days=JANELA_PARECIDO)
+    existentes = list(db.session.scalars(
+        select(Lancamento).where(
+            Lancamento.usuario_id == uid,
+            Lancamento.data >= min(datas[i] for i in alvos) - folga,
+            Lancamento.data <= max(datas[i] for i in alvos) + folga,
+            (Lancamento.importacao_id.is_(None)) | (Lancamento.importacao_id != iid),
+        )
+    ))
+    usados: set[uuid.UUID] = set()
+    # Primeiro os casamentos no mesmo dia, para um "quase" não roubar o lançamento de um "exato".
+    for exato in (True, False):
+        for i in alvos:
+            linha = linhas[i]
+            if linha.get("parece_lancado"):
+                continue
+            d, valor = datas[i], dec(linha["valor"])
+            candidatos = [
+                x for x in existentes
+                if x.id not in usados and x.tipo == linha["tipo"] and dec(x.valor) == valor
+                and ((x.data == d) if exato else abs((x.data - d).days) <= JANELA_PARECIDO)
+            ]
+            if not candidatos:
+                continue
+            melhor = min(candidatos, key=lambda x: (abs((x.data - d).days), x.criado_em))
+            usados.add(melhor.id)
+            linha["parece_lancado"] = {
+                "lancamento_id": str(melhor.id), "data": melhor.data.isoformat(),
+                "descricao": (melhor.descricao or "")[:200], "forte": exato,
+            }
+            if exato:
+                linha["incluir"] = False
 
 
 def _data_ou_none(texto: str | None) -> date | None:
@@ -305,6 +351,7 @@ def _ler(app, iid: uuid.UUID, conteudo: bytes) -> None:
                 }
                 if r.conta is not None and novos["resultado"]["linhas"]:
                     _aplicar_conta(usuario, novos["resultado"]["linhas"][0], r.conta, r.estabelecimento, ref)
+                _marcar_parecidos(usuario, iid, novos["resultado"]["linhas"])
             except leitor_ia.ErroLeitura as e:
                 novos = {"estado": "erro", "erro": str(e)[:300]}
             except Exception:  # noqa: BLE001 — qualquer falha vira estado legível, nunca leitura presa
@@ -366,6 +413,7 @@ def _linha_para_json(linha: LinhaRascunho) -> dict:
         "incluir": linha.incluir,
         "destino": linha.destino,
         "conta": _conta_para_json(linha.conta),
+        "parece_lancado": linha.parece_lancado.model_dump(mode="json") if linha.parece_lancado else None,
     }
 
 

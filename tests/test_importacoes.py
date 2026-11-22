@@ -55,7 +55,7 @@ def test_cupom_vira_rascunho_e_original_fica_guardado(api, leitor, app):
     assert imp["linhas"] == [{
         "data": "2026-11-18", "valor": 73.62, "tipo": "despesa", "descricao": "Mercado Bom Preço",
         "categoria_id": mercado["id"], "forma_pagamento": "debito", "confianca": "alta", "incluir": True,
-        "destino": "lancamento", "conta": None,
+        "destino": "lancamento", "conta": None, "parece_lancado": None,
     }]
     assert imp["duplicada_de"] is None
     # a IA recebeu as categorias do usuário
