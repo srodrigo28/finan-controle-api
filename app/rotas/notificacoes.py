@@ -69,6 +69,8 @@ def desinscrever():
 def testar():
     if not svc.configurado():
         raise ErroApi("PUSH_INATIVO", "Notificações não configuradas no servidor.", 503)
+    if svc.problema_na_chave():
+        raise ErroApi("PUSH_INATIVO", "Notificações não configuradas no servidor.", 503)
     u = usuario_atual()
     n = svc.enviar_para_usuario(u.id, "Finan está funcionando 🎉", "Você vai receber lembretes de contas por aqui.", "/contas", "teste")
     return jsonify({"enviados": n})
@@ -82,6 +84,10 @@ def enviar_lembretes():
         raise ErroApi("NAO_AUTORIZADO", "Token do cron inválido.", 401)
     if not svc.configurado():
         return jsonify({"ativo": False, "usuarios": 0, "enviados": 0})
+    problema = svc.problema_na_chave()
+    if problema:
+        # 503 com motivo legível no log do cron, em vez de um 500 genérico todo dia (E005).
+        raise ErroApi("PUSH_CONFIG_INVALIDA", problema, 503)
     resumo = svc.lembretes_de_vencimento()
     return jsonify({"ativo": True, **resumo})
 

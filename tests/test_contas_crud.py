@@ -122,12 +122,12 @@ def test_ajustar_valor_e_vencimento_de_um_mes_so(api):
     assert api.get("/contas/ocorrencias?competencia=2027-01").get_json()["total_pendente"] == 500.0
 
 
-def test_pular_mes_sai_do_total_e_do_push_e_volta_ao_desfazer(api, app, monkeypatch):
+def test_pular_mes_sai_do_total_e_do_push_e_volta_ao_desfazer(api, app, monkeypatch, chave_vapid):
     import app.servicos.notificacoes as mod
 
     enviados = []
     monkeypatch.setattr(mod, "webpush", lambda **kw: enviados.append(kw["data"]))
-    monkeypatch.setitem(app.config, "VAPID_PRIVATE_KEY", "priv")
+    monkeypatch.setitem(app.config, "VAPID_PRIVATE_KEY", chave_vapid)
     api.post("/notificacoes/inscrever", ASSINATURA)
 
     dia = min(28, date.today().day + 1)
@@ -200,12 +200,12 @@ def test_mudar_so_o_nome_nao_mexe_nos_vencimentos(api):
     assert depois["id"] == antes["id"] and depois["vencimento"] == antes["vencimento"]
 
 
-def test_push_ignora_conta_arquivada(api, app, monkeypatch):
+def test_push_ignora_conta_arquivada(api, app, monkeypatch, chave_vapid):
     import app.servicos.notificacoes as mod
 
     enviados = []
     monkeypatch.setattr(mod, "webpush", lambda **kw: enviados.append(kw["data"]))
-    monkeypatch.setitem(app.config, "VAPID_PRIVATE_KEY", "priv")
+    monkeypatch.setitem(app.config, "VAPID_PRIVATE_KEY", chave_vapid)
     api.post("/notificacoes/inscrever", ASSINATURA)
 
     dia = min(28, date.today().day + 1)

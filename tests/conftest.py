@@ -94,3 +94,16 @@ def api(cliente) -> Api:
 @pytest.fixture
 def outro_api(cliente) -> Api:
     return registrar(cliente, nome="Outro")
+
+
+@pytest.fixture(scope="session")
+def chave_vapid() -> str:
+    """Chave privada VAPID válida (32 bytes em base64url): desde o E005 a API confere se ela abre."""
+    import base64
+
+    from py_vapid import Vapid
+
+    v = Vapid()
+    v.generate_keys()
+    bruta = v.private_key.private_numbers().private_value.to_bytes(32, "big")
+    return base64.urlsafe_b64encode(bruta).decode().rstrip("=")

@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from flask import current_app
+from py_vapid import Vapid
 from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 
@@ -18,9 +19,26 @@ from app.servicos.tempo import hoje
 log = logging.getLogger(__name__)
 
 
+SUBJECT_PADRAO = "mailto:contato@99dev.pro"
+
+
 def configurado() -> bool:
     cfg = current_app.config
     return bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY"))
+
+
+def problema_na_chave() -> str | None:
+    """Confere se a chave privada VAPID abre (E005: linha do .env colada no fim dela). Nunca devolve a chave."""
+    try:
+        Vapid.from_string(current_app.config["VAPID_PRIVATE_KEY"])
+    except Exception as exc:  # noqa: BLE001 — qualquer formato inválido
+        return f"VAPID_PRIVATE_KEY inválida ({type(exc).__name__}): confira o .env do servidor."
+    return None
+
+
+def _subject() -> str:
+    # Variável presente mas vazia (E005) também cai no padrão.
+    return current_app.config.get("VAPID_SUBJECT") or SUBJECT_PADRAO
 
 
 def _moeda(v) -> str:
@@ -36,7 +54,7 @@ def enviar_para_inscricao(insc: InscricaoPush, titulo: str, corpo: str, url: str
             subscription_info=insc.como_assinatura(),
             data=payload,
             vapid_private_key=cfg["VAPID_PRIVATE_KEY"],
-            vapid_claims={"sub": cfg.get("VAPID_SUBJECT", "mailto:contato@99dev.pro")},
+            vapid_claims={"sub": _subject()},
             ttl=60 * 60 * 12,
         )
         insc.ultimo_envio_em = datetime.now(timezone.utc)
@@ -50,6 +68,10 @@ def enviar_para_inscricao(insc: InscricaoPush, titulo: str, corpo: str, url: str
             db.session.delete(insc)
         else:
             log.warning("push falhou (%s): %s", status, exc)
+        return False
+    except Exception as exc:  # noqa: BLE001 — uma inscrição ruim não derruba o envio dos outros (E005)
+        insc.ultimo_erro = f"{type(exc).__name__}: {str(exc)[:150]}"
+        log.exception("push falhou com erro inesperado (%s)", insc.id)
         return False
 
 
