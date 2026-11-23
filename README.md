@@ -78,3 +78,8 @@ scripts/          checar_smtp.py (diagnóstico do canal de e-mail)
 migrations/       Alembic
 tests/            pytest
 ```
+
+## Publicação
+
+`.\scripts\agente.ps1 /deploy "tipo(api): resumo" -Yes` na raiz (gates → commit → tag → push → redeploy na VPS → health).
+Última conferência do caminho GitHub → VPS: 22/11/2026.
